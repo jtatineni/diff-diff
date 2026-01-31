@@ -1875,9 +1875,9 @@ class TROP:
         TROPResults
             Object containing the ATT estimate, standard error,
             factor estimates, and tuning parameters. The lambda_*
-            attributes show the selected grid values. Infinity values
-            (∞) are converted internally: λ_time/λ_unit=∞ → 0.0 (uniform
-            weights), λ_nn=∞ → 1e10 (factor model disabled).
+            attributes show the selected grid values. For λ_time and
+            λ_unit, 0.0 means uniform weights; inf is not accepted.
+            For λ_nn, ∞ is converted to 1e10 (factor model disabled).
         """
         # Validate inputs
         required_cols = [outcome, treatment, unit, time]
