@@ -96,8 +96,19 @@ For each remaining branch:
 gh pr list --state merged --head "<branch>" --json number,title --limit 1
 ```
 
-- If the JSON array is non-empty, mark the branch as **gh-confirmed merged** and record the PR number and title.
-- If the array is empty, the branch has no merged PR via this method — continue to 4b only if running the git-only fallback in parallel, otherwise skip.
+- **If the command succeeds** (exit code 0) and returns valid JSON:
+  - If the JSON array is non-empty, mark the branch as **gh-confirmed merged** and record the PR number and title.
+  - If the array is empty, the branch has no merged PR via this method — continue to 4b only if running the git-only fallback in parallel, otherwise skip.
+- **If the command fails** (non-zero exit code or invalid JSON output):
+  - If `gh` has failed for **every** branch checked so far (suggesting a systemic issue like auth failure), emit a single summary warning and disable `gh` for remaining branches:
+    ```
+    Warning: GitHub CLI authentication failed. Falling back to git-only detection for all branches.
+    ```
+    Set `GH_AVAILABLE=false` and fall back to step 4b for all remaining branches.
+  - Otherwise (isolated failure for one branch), emit a per-branch warning and fall back to step 4b for that branch:
+    ```
+    Warning: gh pr list failed for branch '<branch>' — falling back to git-only detection.
+    ```
 
 #### 4b. Git gone-tracking detection (fallback, or supplement when gh unavailable)
 
@@ -118,9 +129,8 @@ For each candidate branch, collect:
 
 - **Last commit subject**:
   ```bash
-  git log -1 --format="%s" -- "<branch>"
+  git log -1 --format="%s" "<branch>"
   ```
-  Note: use the branch ref, not `--`: `git log -1 --format="%s" "<branch>"`
 
 - **Relative age**:
   ```bash
@@ -175,17 +185,22 @@ If the user chooses "Cancel", exit without deleting.
 
 ### 9. Delete Branches
 
-For each candidate:
+For each candidate, use a two-pass approach:
 
-- **gh-confirmed merged**: use force delete (safe — GitHub confirms the work is preserved):
-  ```bash
-  git branch -D -- "<branch>"
-  ```
-- **Gone-tracking only** (no gh confirmation): use safe delete:
-  ```bash
-  git branch -d -- "<branch>"
-  ```
-  If `-d` fails (common with squash/rebase merges where commit hashes differ), record the branch as a failure.
+1. **Try safe delete first** (`-d`) for ALL candidates regardless of detection method:
+   ```bash
+   git branch -d -- "<branch>"
+   ```
+
+2. **If `-d` succeeds**: the branch is fully merged into HEAD — no data loss possible. Record as deleted.
+
+3. **If `-d` fails AND the branch is gh-confirmed merged**: fall back to force delete. This is justified because GitHub confirms the PR's work is preserved on the remote; `-d` fails only because squash/rebase merges change commit hashes.
+   ```bash
+   git branch -D -- "<branch>"
+   ```
+   Note: `-D` may drop local-only commits that were never pushed (e.g., work started after the PR merged). The merged PR's content is preserved, but any unpushed local changes on the branch will be lost.
+
+4. **If `-d` fails AND the branch is gone-tracking only** (no gh confirmation): record as a failure. Do not force-delete — there is no external confirmation that the work is preserved.
 
 ### 10. Report Results
 
@@ -248,7 +263,7 @@ Skip with message naming the worktree path.
 
 ## Notes
 
-- Uses `--` before branch names in all git commands to prevent branch names starting with `-` from being interpreted as flags.
+- Uses `--` before branch names in `git branch` deletion commands to prevent branch names starting with `-` from being interpreted as flags. Do **not** use `--` before branch names in `git log`, where `--` separates revisions from pathspecs and would cause git to treat the branch name as a file path.
 - GitHub CLI detection handles squash-merged and rebase-merged PRs correctly (GitHub knows the PR was merged regardless of how commit hashes changed).
 - Git gone-tracking detection is less reliable for squash/rebase merges since `git branch -d` requires the exact commits to be reachable from HEAD.
 - Protected branches (`main`, `master`, current branch, worktree branches) are never deleted regardless of merge status.
