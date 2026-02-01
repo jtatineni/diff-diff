@@ -97,14 +97,18 @@ to `origin` to avoid fetching all remotes. Fails silently if offline or no remot
 #### 6b. Check GitHub PR status
 
 ```bash
-gh pr view "$BRANCH" --json state --jq '.state' 2>/dev/null
+gh pr list --head "$BRANCH" --state all --json state --jq '.[0].state' 2>/dev/null
 ```
+
+Note: `gh pr list --head` queries by branch name, avoiding the `gh pr view` pitfall
+where numeric branch names (e.g., `1234`) are interpreted as PR numbers.
 
 Interpret by checking the **exit code first**, then the output:
 
-1. Command **exits non-zero** (gh not installed, no PR exists, auth/network error) → `PR_MERGED=unknown`
+1. Command **exits non-zero** (gh not installed, auth/network error) → `PR_MERGED=unknown`
 2. Command **exits zero** and output is `MERGED` → `PR_MERGED=true`
 3. Command **exits zero** and output is `OPEN` or `CLOSED` → `PR_MERGED=false`
+4. Command **exits zero** but output is **empty** (no PR exists for this branch) → `PR_MERGED=unknown`
 
 #### 6c. Delete the branch
 
