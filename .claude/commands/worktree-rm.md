@@ -17,9 +17,10 @@ Error: Name required. Usage: /worktree-rm <name>
 Tip: Run /worktree-ls to see active worktrees.
 ```
 
-Validate that **name** contains only `[a-zA-Z0-9._-]`. If not, abort:
+Validate that **name** starts with a letter or digit, followed by `[a-zA-Z0-9._-]`.
+If it starts with `-` or contains invalid characters, abort:
 ```
-Error: Name must contain only letters, digits, dots, hyphens, and underscores.
+Error: Name must start with a letter or digit and contain only letters, digits, dots, hyphens, and underscores.
 Got: <name>
 ```
 
@@ -83,13 +84,13 @@ via `/worktree-new <name>` without a base-ref). If the branch is something else
 (e.g., `feature/existing-branch`), skip deletion — the user didn't create it.
 
 ```bash
-git branch -d "$BRANCH"
+git branch -d -- "$BRANCH"
 ```
 
 Let the output print naturally:
 - If the branch was merged, it will be deleted and git prints a confirmation.
 - If not fully merged, git prints a warning — relay that to the user
-  (suggest `git branch -D "$BRANCH"` if they want to force-delete).
+  (suggest `git branch -D -- "$BRANCH"` if they want to force-delete).
 
 ### 7. Report
 

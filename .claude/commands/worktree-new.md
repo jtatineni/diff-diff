@@ -22,11 +22,26 @@ Error: Name required. Usage: /worktree-new <name> [base-branch]
 Example: /worktree-new feature-bacon-fix
 ```
 
-Validate that **name** contains only `[a-zA-Z0-9._-]`. If it contains spaces,
-slashes, or other shell metacharacters, abort:
+Validate that **name** starts with a letter or digit, followed by `[a-zA-Z0-9._-]`.
+If it starts with `-` or contains spaces, slashes, or other shell metacharacters, abort:
 ```
-Error: Name must contain only letters, digits, dots, hyphens, and underscores.
+Error: Name must start with a letter or digit and contain only letters, digits, dots, hyphens, and underscores.
 Got: <name>
+```
+
+If **base-ref** is provided, apply the same character validation (must match
+`^[a-zA-Z0-9][a-zA-Z0-9._/-]*$` — slashes are allowed for refs like `origin/main`).
+Then verify the ref exists:
+
+```bash
+git rev-parse --verify --quiet "$BASE_REF"
+```
+
+If verification fails, abort:
+```
+Error: Ref not found: <base-ref>
+Available branches:
+<output of: git branch -a --format='%(refname:short)'>
 ```
 
 ### 2. Resolve Paths
@@ -51,15 +66,20 @@ git worktree list
 - If a worktree already exists at `$WORKTREE_PATH`, abort with an error.
 - If a branch named `<name>` already exists and no base-ref was given, ask the user
   whether to check out that existing branch or pick a different name.
+  If the user chooses to use the existing branch:
+  ```bash
+  git worktree add -- "$WORKTREE_PATH" "<name>"
+  ```
+  Then skip step 4 and continue to step 5.
 
 ### 4. Create the Worktree
 
 ```bash
 # If base-ref provided:
-git worktree add "$WORKTREE_PATH" <base-ref>
+git worktree add -- "$WORKTREE_PATH" "$BASE_REF"
 
 # If no base-ref (create new branch from current HEAD):
-git worktree add -b <name> "$WORKTREE_PATH"
+git worktree add -b "<name>" -- "$WORKTREE_PATH"
 ```
 
 ### 5. Set Up Python Environment
