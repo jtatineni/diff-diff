@@ -564,7 +564,6 @@ def _extract_event_study_params(
         post_periods = results.post_periods
 
         # Filter periods with finite effects/SEs, maintaining pre-then-post order
-        # (sorted() alone would fail if period labels don't sort chronologically)
         finite_periods = {
             p
             for p in results.period_effects.keys()
@@ -572,8 +571,8 @@ def _extract_event_study_params(
             and np.isfinite(results.period_effects[p].se)
         }
 
-        pre_estimated = sorted(p for p in finite_periods if p in pre_periods)
-        post_estimated = sorted(p for p in finite_periods if p in post_periods)
+        pre_estimated = [p for p in pre_periods if p in finite_periods]
+        post_estimated = [p for p in post_periods if p in finite_periods]
         all_estimated = pre_estimated + post_estimated
 
         if not all_estimated:
