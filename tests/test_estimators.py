@@ -2410,9 +2410,10 @@ class TestSyntheticDiD:
 
         return pd.DataFrame(data)
 
-    def test_basic_fit(self, sdid_panel_data):
+    def test_basic_fit(self, sdid_panel_data, ci_params):
         """Test basic SDID model fitting."""
-        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2428,9 +2429,10 @@ class TestSyntheticDiD:
         assert results.n_treated == 5
         assert results.n_control == 25
 
-    def test_att_direction(self, sdid_panel_data):
+    def test_att_direction(self, sdid_panel_data, ci_params):
         """Test that ATT is estimated in correct direction."""
-        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2489,9 +2491,10 @@ class TestSyntheticDiD:
         for w in results.unit_weights.values():
             assert w >= 0
 
-    def test_single_treated_unit(self, single_treated_unit_data):
+    def test_single_treated_unit(self, single_treated_unit_data, ci_params):
         """Test SDID with a single treated unit (classic SC scenario)."""
-        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             single_treated_unit_data,
             outcome="outcome",
@@ -2554,9 +2557,10 @@ class TestSyntheticDiD:
         assert len(results.placebo_effects) > 0
         assert results.se > 0
 
-    def test_bootstrap_inference(self, sdid_panel_data):
+    def test_bootstrap_inference(self, sdid_panel_data, ci_params):
         """Test bootstrap-based inference."""
-        sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=100, seed=42)
+        n_boot = ci_params.bootstrap(100)
+        sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2567,7 +2571,7 @@ class TestSyntheticDiD:
         )
 
         assert results.variance_method == "bootstrap"
-        assert results.n_bootstrap == 100
+        assert results.n_bootstrap == n_boot
         assert results.se > 0
         assert results.conf_int[0] < results.att < results.conf_int[1]
 
@@ -2627,9 +2631,10 @@ class TestSyntheticDiD:
         assert results.pre_treatment_fit is not None
         assert results.pre_treatment_fit >= 0
 
-    def test_summary_output(self, sdid_panel_data):
+    def test_summary_output(self, sdid_panel_data, ci_params):
         """Test that summary produces string output."""
-        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2645,9 +2650,10 @@ class TestSyntheticDiD:
         assert "ATT" in summary
         assert "Unit Weights" in summary
 
-    def test_to_dict(self, sdid_panel_data):
+    def test_to_dict(self, sdid_panel_data, ci_params):
         """Test conversion to dictionary."""
-        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2664,9 +2670,10 @@ class TestSyntheticDiD:
         assert "n_post_periods" in result_dict
         assert "pre_treatment_fit" in result_dict
 
-    def test_to_dataframe(self, sdid_panel_data):
+    def test_to_dataframe(self, sdid_panel_data, ci_params):
         """Test conversion to DataFrame."""
-        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2681,9 +2688,10 @@ class TestSyntheticDiD:
         assert len(df) == 1
         assert "att" in df.columns
 
-    def test_repr(self, sdid_panel_data):
+    def test_repr(self, sdid_panel_data, ci_params):
         """Test string representation."""
-        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2697,9 +2705,10 @@ class TestSyntheticDiD:
         assert "SyntheticDiDResults" in repr_str
         assert "ATT=" in repr_str
 
-    def test_is_significant_property(self, sdid_panel_data):
+    def test_is_significant_property(self, sdid_panel_data, ci_params):
         """Test is_significant property."""
-        sdid = SyntheticDiD(n_bootstrap=100, seed=42)
+        n_boot = ci_params.bootstrap(100)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2813,12 +2822,13 @@ class TestSyntheticDiD:
         assert results.pre_periods == [0, 1, 2, 3]
         assert results.post_periods == [4, 5, 6, 7]
 
-    def test_with_covariates(self, sdid_panel_data):
+    def test_with_covariates(self, sdid_panel_data, ci_params):
         """Test SDID with covariates."""
         # Add a covariate
         sdid_panel_data["size"] = np.random.normal(100, 10, len(sdid_panel_data))
 
-        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2832,9 +2842,10 @@ class TestSyntheticDiD:
         assert results is not None
         assert sdid.is_fitted_
 
-    def test_confidence_interval_contains_estimate(self, sdid_panel_data):
+    def test_confidence_interval_contains_estimate(self, sdid_panel_data, ci_params):
         """Test that confidence interval contains the estimate."""
-        sdid = SyntheticDiD(n_bootstrap=100, seed=42)
+        n_boot = ci_params.bootstrap(100)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -2847,9 +2858,10 @@ class TestSyntheticDiD:
         lower, upper = results.conf_int
         assert lower < results.att < upper
 
-    def test_reproducibility_with_seed(self, sdid_panel_data):
+    def test_reproducibility_with_seed(self, sdid_panel_data, ci_params):
         """Test that results are reproducible with the same seed."""
-        results1 = SyntheticDiD(n_bootstrap=50, seed=42).fit(
+        n_boot = ci_params.bootstrap(50)
+        results1 = SyntheticDiD(n_bootstrap=n_boot, seed=42).fit(
             sdid_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -2858,7 +2870,7 @@ class TestSyntheticDiD:
             post_periods=[4, 5, 6, 7],
         )
 
-        results2 = SyntheticDiD(n_bootstrap=50, seed=42).fit(
+        results2 = SyntheticDiD(n_bootstrap=n_boot, seed=42).fit(
             sdid_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -2870,7 +2882,7 @@ class TestSyntheticDiD:
         assert results1.att == results2.att
         assert results1.se == results2.se
 
-    def test_insufficient_pre_periods_warning(self):
+    def test_insufficient_pre_periods_warning(self, ci_params):
         """Test that SDID warns with very few pre-treatment periods."""
         np.random.seed(42)
 
@@ -2909,7 +2921,8 @@ class TestSyntheticDiD:
 
         df = pd.DataFrame(data)
 
-        sdid = SyntheticDiD(n_bootstrap=30, seed=42)
+        n_boot = ci_params.bootstrap(30)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
 
         # Should work but may warn about few pre-periods
         # (Depending on implementation - some may warn, some may not)
@@ -2926,7 +2939,7 @@ class TestSyntheticDiD:
         assert np.isfinite(results.att)
         assert results.se > 0
 
-    def test_single_pre_period_edge_case(self):
+    def test_single_pre_period_edge_case(self, ci_params):
         """Test SDID with single pre-treatment period (extreme edge case)."""
         np.random.seed(42)
 
@@ -2964,7 +2977,8 @@ class TestSyntheticDiD:
 
         df = pd.DataFrame(data)
 
-        sdid = SyntheticDiD(n_bootstrap=30, seed=42)
+        n_boot = ci_params.bootstrap(30)
+        sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
 
         # With single pre-period, time weights will be trivially [1.0]
         results = sdid.fit(
@@ -2981,7 +2995,7 @@ class TestSyntheticDiD:
         # Time weights should have single entry
         assert len(results.time_weights) == 1
 
-    def test_more_pre_periods_than_control_units(self):
+    def test_more_pre_periods_than_control_units(self, ci_params):
         """Test SDID when n_pre_periods > n_control_units (underdetermined)."""
         np.random.seed(42)
 
@@ -3020,7 +3034,8 @@ class TestSyntheticDiD:
         df = pd.DataFrame(data)
 
         # Use regularization to help with underdetermined system
-        sdid = SyntheticDiD(lambda_reg=1.0, n_bootstrap=30, seed=42)
+        n_boot = ci_params.bootstrap(30)
+        sdid = SyntheticDiD(lambda_reg=1.0, n_bootstrap=n_boot, seed=42)
 
         results = sdid.fit(
             df,
