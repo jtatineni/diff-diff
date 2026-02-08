@@ -14,8 +14,10 @@ without overwhelming the context window.
 Parse `$ARGUMENTS` to extract:
 - **PDF path** (required): First positional argument. Must be a path ending in `.pdf`.
 - `--name <name>` (optional): Estimator/method name for the output file slug.
-  If omitted, derive from the paper title on page 1: first author's last name,
-  lowercased, hyphenated with year (e.g., "callaway-santanna-2021").
+  The name is sanitized to `[a-z0-9-]` (path separators and special characters are stripped).
+  If omitted, derive from the paper's common citation form: first author's last name,
+  or both authors hyphenated for two-author papers (e.g., "callaway-santanna-2021").
+  For 3+ authors, use first author only (e.g., "athey-2025"). Lowercase, hyphen-separated.
   If year isn't on page 1, omit it from the slug.
 - `--confirm` (optional flag): Pause after reconnaissance to let user adjust
   page ranges. Also pause after extraction to let user review before synthesis.
@@ -136,11 +138,15 @@ From page 1, extract: paper title, author names, abstract.
 
 **Step 2: Derive output name**
 
-If `--name` was provided, use it as the slug. Otherwise derive from the paper title:
-- Take the first author's last name
-- Lowercase it
-- If a year is visible on page 1, append it with a hyphen (e.g., "callaway-santanna-2021")
-- If no year, just use the name (e.g., "callaway-santanna")
+If `--name` was provided, use it as the slug. Otherwise derive from the paper's common citation form:
+- For single-author papers: first author's last name (e.g., "roth-2022")
+- For two-author papers: both authors hyphenated (e.g., "callaway-santanna-2021")
+- For 3+ authors: first author only (e.g., "athey-2025")
+- Lowercase, hyphen-separated
+- If a year is visible on page 1, append it with a hyphen
+- If no year, just use the name(s)
+
+**Sanitize the slug:** Strip any path separators (`/`, `\`), replace spaces and underscores with hyphens, lowercase, collapse to `[a-z0-9-]` only, trim leading/trailing hyphens. If the result is empty after sanitization, use AskUserQuestion to request a valid name. Verify the final output path `docs/methodology/papers/{slug}-review.md` resolves within the project directory.
 
 **Step 3: Update .gitignore and create directories**
 
@@ -176,7 +182,7 @@ Scout agent prompt — include the PDF path and these instructions:
 > PDF path: {pdf-path}
 >
 > **Step 1: Find total pages via binary search.**
-> Try reading a single page at a time using the Read tool (pages: "{N}"). A page exists if the Read tool returns content. A page does NOT exist if the Read tool returns an error (any error means the page is beyond the document).
+> Try reading a single page at a time using the Read tool (pages: "{N}"). A page exists if the Read tool returns content. A page does NOT exist if the Read tool returns an error. **However:** if a page fails during binary search but you previously read a *higher-numbered* page successfully, the failure is likely a corrupt page, not the end of the document — treat it as existing (set low = mid) and note the page number as potentially unreadable.
 >
 > Pseudocode:
 >
@@ -200,6 +206,11 @@ Scout agent prompt — include the PDF path and these instructions:
 >     For N from low to high:
 >       Try page N. If fails: last_page = N - 1. Break.
 >     If all succeed: last_page = high.
+>     # Phase 4: Sanity check for corrupt pages
+>     Try reading page last_page + 5.
+>     If it succeeds: the binary search likely hit a corrupt page.
+>       Warn: "Page count may be inaccurate — a mid-document page was unreadable."
+>       Set last_page = last_page + 5 and repeat the linear scan from there.
 >
 > Example for a 12-page paper: page 64(fail)->low=1,high=64. Binary: 32(fail)->16(fail)->8(success)->12(success)->14(fail)->linear scan 12,13,14: 13(fail)->total_pages=12.
 > Example for a 150-page paper: page 64(success)->128(success)->256(fail)->low=128,high=256. Binary: 192(fail)->160(fail)->144(success)->152(fail)->148(success)->linear scan 148,149,150,151: 151(fail)->total_pages=150.
