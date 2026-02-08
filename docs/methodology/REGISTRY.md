@@ -231,9 +231,14 @@ Estimated via within-transformation (demeaning):
 ```
 where tildes denote demeaned variables.
 
+**Note:** The interaction term `D_i × Post_t` is within-transformed (demeaned) alongside the
+outcome and covariates before regression. This is required by the Frisch-Waugh-Lovell theorem:
+all regressors must be projected out of the same fixed effects space as the dependent variable.
+This matches the behavior of R's `fixest::feols()` with absorbed FE.
+
 *Standard errors:*
 - Default: Cluster-robust at unit level (accounts for serial correlation)
-- Degrees of freedom adjusted for absorbed fixed effects
+- Degrees of freedom adjusted for absorbed fixed effects: `df_adjustment = n_units + n_times - 2`
 
 *Edge cases:*
 - Singleton units/periods are automatically dropped
@@ -241,16 +246,18 @@ where tildes denote demeaned variables.
 - Covariate collinearity emits warning but estimation continues (ATT still identified)
 - Rank-deficient design matrix: warns and sets NA for dropped coefficients (R-style, matches `lm()`)
 - Unbalanced panels handled via proper demeaning
+- Multi-period `time` parameter: only binary (0/1) post indicator is supported; multi-period values
+  produce `treated × period_number` rather than `treated × post_indicator`
 
 **Reference implementation(s):**
-- R: `fixest::feols(y ~ treat | unit + time, data)`
+- R: `fixest::feols(y ~ treat:post | unit + post, data, cluster = ~unit)`
 - Stata: `reghdfe y treat, absorb(unit time) cluster(unit)`
 
 **Requirements checklist:**
-- [ ] Staggered treatment automatically triggers warning
-- [ ] Auto-clusters standard errors at unit level
-- [ ] `decompose()` method returns BaconDecompositionResults
-- [ ] Within-transformation correctly handles unbalanced panels
+- [x] Staggered treatment automatically triggers warning
+- [x] Auto-clusters standard errors at unit level
+- [x] `decompose()` method returns BaconDecompositionResults
+- [x] Within-transformation correctly handles unbalanced panels
 
 ---
 

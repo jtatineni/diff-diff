@@ -96,19 +96,22 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # Use unit-level clustering if not specified (use local variable to avoid mutation)
         cluster_var = self.cluster if self.cluster is not None else unit
 
-        # Demean data (within transformation for fixed effects)
-        data_demeaned = self._within_transform(data, outcome, unit, time, covariates)
+        # Create treatment × post interaction from raw data before demeaning.
+        # This must be within-transformed alongside the outcome and covariates
+        # so that the regression uses demeaned regressors (FWL theorem).
+        data = data.copy()
+        data["_treatment_post"] = data[treatment] * data[time]
 
-        # Create treatment × post interaction
-        # For staggered designs, we'd need to identify treatment timing per unit
-        # For now, assume standard 2-period design
-        data_demeaned["_treatment_post"] = (
-            data_demeaned[treatment] * data_demeaned[time]
+        # Demean outcome, covariates, AND interaction (within transformation for FE)
+        data_demeaned = self._within_transform(data, outcome, unit, time, covariates)
+        # Also demean the interaction term
+        data_demeaned = _within_transform_util(
+            data_demeaned, ["_treatment_post"], unit, time, suffix="_demeaned"
         )
 
         # Extract variables for regression
         y = data_demeaned[f"{outcome}_demeaned"].values
-        X_list = [data_demeaned["_treatment_post"].values]
+        X_list = [data_demeaned["_treatment_post_demeaned"].values]
 
         if covariates:
             for cov in covariates:
