@@ -27,6 +27,9 @@ diff-diff is validated against the following R packages:
    * - ``CallawaySantAnna``
      - ``did::att_gt``
      - Callaway & Sant'Anna (2021)
+   * - ``MultiPeriodDiD``
+     - ``fixest::feols``
+     - Event study with treatment × period interactions
    * - ``SyntheticDiD``
      - ``synthdid::synthdid_estimate``
      - Arkhangelsky et al. (2021)
@@ -74,6 +77,11 @@ Summary Table
      - 0.0%
      - Yes
      - **PASS**
+   * - MultiPeriodDiD
+     - < 1e-11
+     - 0.0%
+     - Yes
+     - **PASS**
    * - CallawaySantAnna
      - < 1e-10
      - 0.0%
@@ -115,6 +123,45 @@ Basic DiD Results
      - **22x faster**
 
 **Validation**: PASS - Results are numerically identical across all implementations.
+
+MultiPeriodDiD Results
+~~~~~~~~~~~~~~~~~~~~~~
+
+**Data**: 200 units, 8 periods (4 pre, 4 post), true ATT = 3.0 (small scale)
+
+.. list-table::
+   :header-rows: 1
+
+   * - Metric
+     - diff-diff (Pure)
+     - diff-diff (Rust)
+     - R fixest
+     - Difference
+   * - ATT
+     - 2.912
+     - 2.912
+     - 2.912
+     - < 1e-11
+   * - SE
+     - 0.158
+     - 0.158
+     - 0.158
+     - 0.0%
+   * - Period corr.
+     - 1.000
+     - 1.000
+     - (ref)
+     - Period max diff < 3e-11
+   * - Time (s)
+     - 0.005
+     - 0.035
+     - 0.035
+     - **7x faster** (pure)
+
+**Validation**: PASS - Both average ATT and all period-level effects match R's
+``fixest::feols(outcome ~ treated * time_f)`` to machine precision. The regression
+is algebraically identical: explicit intercept, treatment main effect, period dummies,
+and treatment × period interactions with cluster-robust SEs.
 
 Synthetic DiD Results
 ~~~~~~~~~~~~~~~~~~~~~
@@ -363,35 +410,41 @@ Dataset Sizes
 
 .. list-table::
    :header-rows: 1
-   :widths: 12 22 22 22 22
+   :widths: 10 18 18 18 18 18
 
    * - Scale
      - BasicDiD
+     - MultiPeriodDiD
      - CallawaySantAnna
      - SyntheticDiD
      - Observations
    * - small
      - 100 × 4
      - 200 × 8
+     - 200 × 8
      - 50 × 20
      - 400 - 1,600
    * - 1k
      - 1,000 × 6
+     - 1,000 × 10
      - 1,000 × 10
      - 1,000 × 30
      - 6,000 - 30,000
    * - 5k
      - 5,000 × 8
      - 5,000 × 12
+     - 5,000 × 12
      - 5,000 × 40
      - 40,000 - 200,000
    * - 10k
      - 10,000 × 10
+     - 10,000 × 12
      - 10,000 × 15
      - 10,000 × 50
      - 100,000 - 500,000
    * - 20k
      - 20,000 × 12
+     - 20,000 × 16
      - 20,000 × 18
      - 20,000 × 60
      - 240,000 - 1,200,000
@@ -565,6 +618,7 @@ Running Benchmarks
    python benchmarks/run_benchmarks.py --estimator callaway --scale 1k --replications 3
    python benchmarks/run_benchmarks.py --estimator synthdid --scale small --replications 3
    python benchmarks/run_benchmarks.py --estimator basic --scale 20k --replications 3
+   python benchmarks/run_benchmarks.py --estimator multiperiod --scale small --replications 3
 
    # Available scales: small, 1k, 5k, 10k, 20k, all
    # Default: small (backward compatible)
@@ -590,6 +644,10 @@ When to Trust Results
 ~~~~~~~~~~~~~~~~~~~~~
 
 - **BasicDiD/TWFE**: Results are identical to R. Use with confidence.
+
+- **MultiPeriodDiD**: Results are identical to R's ``fixest::feols`` with
+  ``treated * time_f`` interaction syntax. Both average ATT and all period-level
+  effects match to machine precision. Use with confidence.
 
 - **SyntheticDiD**: Both point estimates (0.3% diff) and standard errors (3.1% diff)
   match R closely. Use ``variance_method="placebo"`` (default) to match R's

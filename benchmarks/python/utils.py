@@ -331,6 +331,68 @@ def generate_sdid_data(
     return pd.DataFrame(data)
 
 
+def generate_multiperiod_data(
+    n_units: int = 200,
+    n_pre: int = 4,
+    n_post: int = 4,
+    treatment_effect: float = 3.0,
+    treatment_fraction: float = 0.5,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    Generate synthetic multi-period event study data for benchmarking.
+
+    All treated units receive treatment simultaneously at the same time.
+
+    Parameters
+    ----------
+    n_units : int
+        Number of units.
+    n_pre : int
+        Number of pre-treatment periods.
+    n_post : int
+        Number of post-treatment periods.
+    treatment_effect : float
+        True treatment effect in post-periods.
+    treatment_fraction : float
+        Fraction of units that are treated.
+    seed : int
+        Random seed.
+
+    Returns
+    -------
+    pd.DataFrame
+        Panel data with columns: unit, time, outcome, treated.
+    """
+    rng = np.random.default_rng(seed)
+
+    n_treated = int(n_units * treatment_fraction)
+    n_periods = n_pre + n_post
+    data = []
+
+    for unit in range(n_units):
+        unit_fe = rng.normal(0, 2)
+        treated = 1 if unit < n_treated else 0
+
+        for t in range(1, n_periods + 1):
+            time_fe = t * 0.5
+            post = 1 if t > n_pre else 0
+
+            effect = treatment_effect if (treated and post) else 0
+            outcome = unit_fe + time_fe + effect + rng.normal(0, 1)
+
+            data.append(
+                {
+                    "unit": unit,
+                    "time": t,
+                    "outcome": outcome,
+                    "treated": treated,
+                }
+            )
+
+    return pd.DataFrame(data)
+
+
 def load_benchmark_data(path: Path) -> pd.DataFrame:
     """Load benchmark data from CSV."""
     return pd.read_csv(path)

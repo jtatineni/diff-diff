@@ -351,6 +351,7 @@ python benchmarks/run_benchmarks.py --all
 
 # Run specific estimator
 python benchmarks/run_benchmarks.py --estimator callaway
+python benchmarks/run_benchmarks.py --estimator multiperiod
 ```
 
 See `docs/benchmarks.rst` for full methodology and validation results.
