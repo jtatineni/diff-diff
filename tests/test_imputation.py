@@ -1041,3 +1041,192 @@ class TestImputationEdgeCases:
         est = ImputationDiD()
         with pytest.raises(RuntimeError, match="must be fitted"):
             est.summary()
+
+    def test_rank_condition_missing_untreated_period(self):
+        """Test warning when a post-treatment period has no untreated units."""
+        # Construct data where ALL units are treated from period 2 onward,
+        # so periods 2+ have no untreated observations
+        rng = np.random.default_rng(42)
+        n_units, n_periods = 20, 5
+        rows = []
+        for i in range(n_units):
+            ft = 2  # all units treated at period 2
+            for t in range(n_periods):
+                y = rng.standard_normal() + i * 0.1 + t * 0.05
+                if t >= ft:
+                    y += 1.0  # treatment effect
+                rows.append({
+                    "unit": i, "time": t, "outcome": y, "first_treat": ft,
+                })
+        data = pd.DataFrame(rows)
+
+        est = ImputationDiD(rank_deficient_action="warn")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = est.fit(
+                data, outcome="outcome", unit="unit",
+                time="time", first_treat="first_treat",
+                aggregate="event_study",
+            )
+            rank_warnings = [x for x in w if "Rank condition" in str(x.message)]
+            assert len(rank_warnings) > 0, "Should warn about rank condition violation"
+
+        # Affected horizons should have NaN effects (periods with no untreated units)
+        if results.event_study_effects:
+            nan_effects = [
+                h for h, d in results.event_study_effects.items()
+                if np.isnan(d["effect"]) and d.get("n_obs", 1) > 0
+            ]
+            assert len(nan_effects) > 0, "Some horizons should have NaN effects"
+
+    def test_rank_condition_error_mode(self):
+        """Test error raised when rank condition fails with action='error'."""
+        # Same setup as test_rank_condition_missing_untreated_period
+        rng = np.random.default_rng(42)
+        n_units, n_periods = 20, 5
+        rows = []
+        for i in range(n_units):
+            ft = 2
+            for t in range(n_periods):
+                y = rng.standard_normal() + i * 0.1 + t * 0.05
+                if t >= ft:
+                    y += 1.0
+                rows.append({
+                    "unit": i, "time": t, "outcome": y, "first_treat": ft,
+                })
+        data = pd.DataFrame(rows)
+
+        est = ImputationDiD(rank_deficient_action="error")
+        with pytest.raises(ValueError, match="Rank condition"):
+            est.fit(
+                data, outcome="outcome", unit="unit",
+                time="time", first_treat="first_treat",
+            )
+
+    def test_bootstrap_cluster_not_unit(self, ci_params):
+        """Test bootstrap uses cluster column when cluster != unit."""
+        data = generate_test_data(n_units=100, n_periods=8, seed=42)
+        # Create cluster column grouping every 5 units
+        unit_to_cluster = {u: u // 5 for u in data["unit"].unique()}
+        data["cluster_id"] = data["unit"].map(unit_to_cluster)
+
+        n_boot = ci_params.bootstrap(99, min_n=49)
+        est = ImputationDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42)
+        results = est.fit(
+            data, outcome="outcome", unit="unit",
+            time="time", first_treat="first_treat",
+        )
+        assert results.bootstrap_results is not None
+        assert results.bootstrap_results.overall_att_se > 0
+
+        # Bootstrap SE with cluster should differ from unit-level bootstrap
+        est_unit = ImputationDiD(n_bootstrap=n_boot, seed=42)
+        results_unit = est_unit.fit(
+            data, outcome="outcome", unit="unit",
+            time="time", first_treat="first_treat",
+        )
+        assert (
+            results.bootstrap_results.overall_att_se
+            != results_unit.bootstrap_results.overall_att_se
+        )
+
+    def test_bootstrap_invalid_cluster_column(self):
+        """Test error when cluster column doesn't exist."""
+        data = generate_test_data(n_units=50, seed=42)
+        est = ImputationDiD(cluster="nonexistent_col")
+        with pytest.raises(ValueError, match="not found"):
+            est.fit(
+                data, outcome="outcome", unit="unit",
+                time="time", first_treat="first_treat",
+            )
+
+    def test_plot_reference_with_anticipation(self):
+        """Test event study plot detects reference period with anticipation."""
+        data = generate_test_data(n_units=100, n_periods=10, seed=42)
+        est = ImputationDiD(anticipation=1)
+        results = est.fit(
+            data, outcome="outcome", unit="unit",
+            time="time", first_treat="first_treat",
+            aggregate="event_study",
+        )
+        # Reference should be at -2 (= -1 - anticipation)
+        assert -2 in results.event_study_effects
+        assert results.event_study_effects[-2]["n_obs"] == 0  # reference marker
+
+        # Test that plot_event_study auto-detects it
+        pytest.importorskip("matplotlib")
+        from diff_diff import plot_event_study
+        fig = plot_event_study(results)
+        assert fig is not None
+
+    def test_unbalanced_panel_fe_correctness(self):
+        """Test FE estimates match OLS for unbalanced panel."""
+        # Create small unbalanced panel with known FE structure
+        rng = np.random.default_rng(42)
+        n_units, n_periods = 8, 5
+        unit_fe_true = rng.standard_normal(n_units) * 2.0
+        time_fe_true = np.linspace(0, 1, n_periods)
+
+        rows = []
+        for i in range(n_units):
+            for t in range(n_periods):
+                # Drop ~20% of obs to make unbalanced
+                if rng.random() < 0.2:
+                    continue
+                y = unit_fe_true[i] + time_fe_true[t] + rng.standard_normal() * 0.01
+                rows.append({
+                    "unit": i, "time": t, "outcome": y,
+                    "first_treat": n_periods,  # all never-treated -> Omega_0
+                })
+
+        df_0 = pd.DataFrame(rows)
+
+        # Compute FE via iterative method (what we're testing)
+        est = ImputationDiD()
+        unit_fe_iter, time_fe_iter = est._iterative_fe(
+            df_0["outcome"].values,
+            df_0["unit"].values,
+            df_0["time"].values,
+            df_0.index,
+        )
+
+        # Compute exact OLS FE via lstsq with dummy variables
+        unique_units = sorted(df_0["unit"].unique())
+        unique_times = sorted(df_0["time"].unique())
+        n = len(df_0)
+        n_u = len(unique_units)
+        n_t = len(unique_times)
+        u_map = {u: i for i, u in enumerate(unique_units)}
+        t_map = {t: i for i, t in enumerate(unique_times)}
+
+        X = np.zeros((n, 1 + (n_u - 1) + (n_t - 1)))
+        X[:, 0] = 1.0  # intercept
+        for j in range(n):
+            uid = u_map[df_0["unit"].iloc[j]]
+            tid = t_map[df_0["time"].iloc[j]]
+            if uid > 0:
+                X[j, uid] = 1.0
+            if tid > 0:
+                X[j, n_u + tid - 1] = 1.0
+
+        beta_ols = np.linalg.lstsq(X, df_0["outcome"].values, rcond=None)[0]
+
+        # Reconstruct OLS fitted values
+        intercept = beta_ols[0]
+        unit_fe_ols = {unique_units[0]: intercept}
+        for i in range(1, n_u):
+            unit_fe_ols[unique_units[i]] = intercept + beta_ols[i]
+        time_fe_ols = {unique_times[0]: 0.0}
+        for i in range(1, n_t):
+            time_fe_ols[unique_times[i]] = beta_ols[n_u + i - 1]
+
+        # Compare fitted values (parameterization-invariant check)
+        for j in range(n):
+            u = df_0["unit"].iloc[j]
+            t = df_0["time"].iloc[j]
+            y_hat_iter = unit_fe_iter[u] + time_fe_iter[t]
+            y_hat_ols = unit_fe_ols[u] + time_fe_ols[t]
+            assert abs(y_hat_iter - y_hat_ols) < 1e-6, (
+                f"Fitted values differ at unit={u}, time={t}: "
+                f"iterative={y_hat_iter:.8f} vs OLS={y_hat_ols:.8f}"
+            )

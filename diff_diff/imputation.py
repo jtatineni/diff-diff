@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy import stats
+from scipy import sparse, stats
 
 from diff_diff.linalg import solve_ols
 from diff_diff.results import _get_significance_stars
@@ -680,6 +680,11 @@ class ImputationDiD:
 
         # Cluster variable
         cluster_var = self.cluster if self.cluster is not None else unit
+        if self.cluster is not None and self.cluster not in df.columns:
+            raise ValueError(
+                f"Cluster column '{self.cluster}' not found in data. "
+                f"Available columns: {list(df.columns)}"
+            )
 
         # Compute relative time
         df["_rel_time"] = np.where(
@@ -692,6 +697,43 @@ class ImputationDiD:
         unit_fe, time_fe, grand_mean, delta_hat = self._fit_untreated_model(
             df, outcome, unit, time, covariates, omega_0_mask
         )
+
+        # ---- Rank condition checks ----
+        # Check: every treated unit should have >= 1 untreated period (for unit FE)
+        treated_unit_ids = df.loc[omega_1_mask, unit].unique()
+        units_with_fe = set(unit_fe.keys())
+        units_missing_fe = set(treated_unit_ids) - units_with_fe
+
+        # Check: every post-treatment period should have >= 1 untreated unit (for time FE)
+        post_period_ids = df.loc[omega_1_mask, time].unique()
+        periods_with_fe = set(time_fe.keys())
+        periods_missing_fe = set(post_period_ids) - periods_with_fe
+
+        if units_missing_fe or periods_missing_fe:
+            parts = []
+            if units_missing_fe:
+                sorted_missing = sorted(units_missing_fe)
+                parts.append(
+                    f"{len(units_missing_fe)} treated unit(s) have no untreated "
+                    f"periods (units: {sorted_missing[:5]}"
+                    f"{'...' if len(units_missing_fe) > 5 else ''})"
+                )
+            if periods_missing_fe:
+                sorted_missing = sorted(periods_missing_fe)
+                parts.append(
+                    f"{len(periods_missing_fe)} post-treatment period(s) have no "
+                    f"untreated units (periods: {sorted_missing[:5]}"
+                    f"{'...' if len(periods_missing_fe) > 5 else ''})"
+                )
+            msg = (
+                "Rank condition violated: " + "; ".join(parts)
+                + ". Affected treatment effects will be NaN."
+            )
+            if self.rank_deficient_action == "error":
+                raise ValueError(msg)
+            elif self.rank_deficient_action == "warn":
+                warnings.warn(msg, UserWarning, stacklevel=2)
+            # "silent": continue without warning
 
         # ---- Step 2: Impute treatment effects ----
         tau_hat, y_hat_0 = self._impute_treatment_effects(
@@ -894,6 +936,57 @@ class ImputationDiD:
     # Step 1: OLS on untreated observations
     # =========================================================================
 
+    def _iterative_fe(
+        self,
+        y: np.ndarray,
+        unit_vals: np.ndarray,
+        time_vals: np.ndarray,
+        idx: pd.Index,
+        max_iter: int = 100,
+        tol: float = 1e-10,
+    ) -> Tuple[Dict[Any, float], Dict[Any, float]]:
+        """
+        Estimate unit and time FE via iterative alternating projection (Gauss-Seidel).
+
+        Converges to the exact OLS solution for both balanced and unbalanced panels.
+        For balanced panels, converges in 1-2 iterations (identical to one-pass).
+        For unbalanced panels, typically 5-20 iterations.
+
+        Returns
+        -------
+        unit_fe : dict
+            Mapping from unit -> unit fixed effect.
+        time_fe : dict
+            Mapping from time -> time fixed effect.
+        """
+        n = len(y)
+        alpha = np.zeros(n)  # unit FE broadcast to obs level
+        beta = np.zeros(n)   # time FE broadcast to obs level
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            for iteration in range(max_iter):
+                # Update time FE: beta_t = mean_i(y_it - alpha_i)
+                resid_after_alpha = y - alpha
+                beta_new = pd.Series(resid_after_alpha, index=idx).groupby(time_vals).transform("mean").values
+
+                # Update unit FE: alpha_i = mean_t(y_it - beta_t)
+                resid_after_beta = y - beta_new
+                alpha_new = pd.Series(resid_after_beta, index=idx).groupby(unit_vals).transform("mean").values
+
+                # Check convergence on FE changes
+                max_change = max(
+                    np.max(np.abs(alpha_new - alpha)),
+                    np.max(np.abs(beta_new - beta)),
+                )
+                alpha = alpha_new
+                beta = beta_new
+                if max_change < tol:
+                    break
+
+        unit_fe = pd.Series(alpha, index=idx).groupby(unit_vals).first().to_dict()
+        time_fe = pd.Series(beta, index=idx).groupby(time_vals).first().to_dict()
+        return unit_fe, time_fe
+
     def _fit_untreated_model(
         self,
         df: pd.DataFrame,
@@ -906,6 +999,10 @@ class ImputationDiD:
         """
         Step 1: Estimate unit + time FE on untreated observations.
 
+        Uses iterative alternating projection (Gauss-Seidel) to compute exact
+        OLS fixed effects for both balanced and unbalanced panels. For balanced
+        panels, converges in 1-2 iterations (identical to one-pass demeaning).
+
         Returns
         -------
         unit_fe : dict
@@ -913,58 +1010,59 @@ class ImputationDiD:
         time_fe : dict
             Time fixed effects {time_period: beta_t}.
         grand_mean : float
-            Grand mean of outcome in Omega_0.
+            Grand mean (0.0 — absorbed into iterative FE).
         delta_hat : np.ndarray or None
             Covariate coefficients (if covariates provided).
         """
         df_0 = df.loc[omega_0_mask]
 
         if covariates is None or len(covariates) == 0:
-            # No covariates: compute FE via groupby
-            grand_mean = float(df_0[outcome].mean())
-            unit_means = df_0.groupby(unit)[outcome].mean()
-            time_means = df_0.groupby(time)[outcome].mean()
-
-            unit_fe = (unit_means - grand_mean).to_dict()
-            time_fe = (time_means - grand_mean).to_dict()
-
-            return unit_fe, time_fe, grand_mean, None
+            # No covariates: estimate FE via iterative alternating projection
+            # (exact OLS for both balanced and unbalanced panels)
+            y = df_0[outcome].values.copy()
+            unit_fe, time_fe = self._iterative_fe(
+                y, df_0[unit].values, df_0[time].values, df_0.index
+            )
+            # grand_mean = 0: iterative FE absorb the intercept
+            return unit_fe, time_fe, 0.0, None
 
         else:
-            # With covariates: within-transform Y and X, OLS for delta
-            # Then recover FE from covariate-adjusted means
-            grand_mean_y = float(df_0[outcome].mean())
-            unit_means_y = df_0.groupby(unit)[outcome].mean()
-            time_means_y = df_0.groupby(time)[outcome].mean()
+            # With covariates: iteratively demean Y and X, OLS for delta,
+            # then recover FE from covariate-adjusted outcome
+            y = df_0[outcome].values.copy()
+            X_raw = df_0[covariates].values.copy()
+            units = df_0[unit].values
+            times = df_0[time].values
+            n_cov = len(covariates)
 
-            # Demean outcome
-            y_dm = (
-                df_0[outcome].values
-                - df_0[unit].map(unit_means_y).values
-                - df_0[time].map(time_means_y).values
-                + grand_mean_y
-            )
+            # Step A: Iteratively demean Y and all X columns to remove unit+time FE
+            def _iterative_demean(vals, unit_vals, time_vals, idx,
+                                  max_iter=100, tol=1e-10):
+                """Demean a vector by iterative alternating projection."""
+                result = vals.copy()
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    for _ in range(max_iter):
+                        # Remove time means
+                        time_means = pd.Series(result, index=idx).groupby(
+                            time_vals).transform("mean").values
+                        result_after_time = result - time_means
+                        # Remove unit means
+                        unit_means = pd.Series(result_after_time, index=idx).groupby(
+                            unit_vals).transform("mean").values
+                        result_new = result_after_time - unit_means
+                        if np.max(np.abs(result_new - result)) < tol:
+                            result = result_new
+                            break
+                        result = result_new
+                return result
 
-            # Demean covariates
-            X_dm = np.zeros((len(df_0), len(covariates)))
-            cov_unit_means = {}
-            cov_time_means = {}
-            cov_grand_means = {}
-            for j, cov in enumerate(covariates):
-                gm = float(df_0[cov].mean())
-                um = df_0.groupby(unit)[cov].mean()
-                tm = df_0.groupby(time)[cov].mean()
-                cov_grand_means[cov] = gm
-                cov_unit_means[cov] = um
-                cov_time_means[cov] = tm
-                X_dm[:, j] = (
-                    df_0[cov].values
-                    - df_0[unit].map(um).values
-                    - df_0[time].map(tm).values
-                    + gm
-                )
+            y_dm = _iterative_demean(y, units, times, df_0.index)
+            X_dm = np.column_stack([
+                _iterative_demean(X_raw[:, j], units, times, df_0.index)
+                for j in range(n_cov)
+            ])
 
-            # OLS for covariate coefficients
+            # Step B: OLS for covariate coefficients on demeaned data
             result = solve_ols(
                 X_dm, y_dm,
                 return_vcov=False,
@@ -972,25 +1070,17 @@ class ImputationDiD:
                 column_names=covariates,
             )
             delta_hat = result[0]
-            # delta_hat shape: (n_covariates,)
 
             # Replace NaN coefficients with 0 for adjustment
             # (rank-deficient covariates are dropped)
             delta_hat_clean = np.where(np.isfinite(delta_hat), delta_hat, 0.0)
 
-            # Compute covariate-adjusted unit and time means
-            # Y_adj = Y - X'delta
-            X_raw = df_0[covariates].values
-            y_adj = df_0[outcome].values - X_raw @ delta_hat_clean
+            # Step C: Recover FE from covariate-adjusted outcome using iterative FE
+            y_adj = y - X_raw @ delta_hat_clean
+            unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index)
 
-            grand_mean = float(np.mean(y_adj))
-            unit_adj_means = pd.Series(y_adj, index=df_0.index).groupby(df_0[unit]).mean()
-            time_adj_means = pd.Series(y_adj, index=df_0.index).groupby(df_0[time]).mean()
-
-            unit_fe = (unit_adj_means - grand_mean).to_dict()
-            time_fe = (time_adj_means - grand_mean).to_dict()
-
-            return unit_fe, time_fe, grand_mean, delta_hat_clean
+            # grand_mean = 0: iterative FE absorb the intercept
+            return unit_fe, time_fe, 0.0, delta_hat_clean
 
     # =========================================================================
     # Step 2: Impute counterfactuals
@@ -1152,6 +1242,9 @@ class ImputationDiD:
         eps_all[omega_0_mask.values] = epsilon_untreated
 
         ve_product = v_all * eps_all
+        # NaN eps from missing FE (rank condition violation). Zero their variance
+        # contribution — matches R's did_imputation which drops unimputable obs.
+        np.nan_to_num(ve_product, copy=False, nan=0.0)
 
         # Sum within clusters
         cluster_ids = df[cluster_var].values
@@ -1177,11 +1270,10 @@ class ImputationDiD:
         Compute v_it for untreated observations with covariates.
 
         Uses the projection: v_untreated = -A_0 (A_0'A_0)^{-1} A_1' w_treated
-        """
-        # Build design matrices with FE dummies
-        # For unit + time FE, we use within-transformation representation
-        # The formula simplifies to including unit and time group indicator effects
 
+        Uses scipy.sparse for FE dummy columns to reduce memory from O(N*(U+T))
+        to O(N) for the FE portion.
+        """
         units_0 = df_0[unit].values
         times_0 = df_0[time].values
         units_1 = df_1[unit].values
@@ -1194,46 +1286,55 @@ class ImputationDiD:
         n_units = len(all_units)
         n_times = len(all_times)
         n_cov = len(covariates)
-        # p = n_units + n_times + n_cov (but drop one unit and one time for identification)
-        # Use n_units-1 unit dummies + n_times-1 time dummies + covariates
-        p = (n_units - 1) + (n_times - 1) + n_cov
+        n_fe_cols = (n_units - 1) + (n_times - 1)
 
-        def _build_A(df_sub, unit_vals, time_vals):
+        def _build_A_sparse(df_sub, unit_vals, time_vals):
             n = len(df_sub)
-            A = np.zeros((n, p))
-            # Unit dummies (drop first)
-            for j in range(n):
-                u_idx = unit_to_idx[unit_vals[j]]
-                if u_idx > 0:
-                    A[j, u_idx - 1] = 1.0
-            # Time dummies (drop first)
-            offset = n_units - 1
-            for j in range(n):
-                t_idx = time_to_idx[time_vals[j]]
-                if t_idx > 0:
-                    A[j, offset + t_idx - 1] = 1.0
-            # Covariates
-            cov_offset = offset + n_times - 1
+
+            # Unit dummies (drop first) — vectorized
+            u_indices = np.array([unit_to_idx[u] for u in unit_vals])
+            u_mask = u_indices > 0  # skip first unit (dropped)
+            u_rows = np.arange(n)[u_mask]
+            u_cols = u_indices[u_mask] - 1
+
+            # Time dummies (drop first) — vectorized
+            t_indices = np.array([time_to_idx[t] for t in time_vals])
+            t_mask = t_indices > 0
+            t_rows = np.arange(n)[t_mask]
+            t_cols = (n_units - 1) + t_indices[t_mask] - 1
+
+            rows = np.concatenate([u_rows, t_rows])
+            cols = np.concatenate([u_cols, t_cols])
+            data = np.ones(len(rows))
+
+            A_fe = sparse.csr_matrix((data, (rows, cols)), shape=(n, n_fe_cols))
+
+            # Covariates (dense, typically few columns)
             if n_cov > 0:
-                A[:, cov_offset:cov_offset + n_cov] = df_sub[covariates].values
+                A_cov = sparse.csr_matrix(df_sub[covariates].values)
+                A = sparse.hstack([A_fe, A_cov], format="csr")
+            else:
+                A = A_fe
+
             return A
 
-        A_0 = _build_A(df_0, units_0, times_0)
-        A_1 = _build_A(df_1, units_1, times_1)
+        A_0 = _build_A_sparse(df_0, units_0, times_0)
+        A_1 = _build_A_sparse(df_1, units_1, times_1)
 
-        # Compute A_1' w
+        # Compute A_1' w (sparse.T @ dense -> dense)
         A1_w = A_1.T @ weights  # shape (p,)
 
         # Solve (A_0'A_0) z = A_1' w
-        A0tA0 = A_0.T @ A_0
+        # A_0'A_0 is (p x p) where p = n_fe_cols + n_cov — small enough to be dense
+        A0tA0 = (A_0.T @ A_0).toarray()
         try:
             z = np.linalg.solve(A0tA0, A1_w)
         except np.linalg.LinAlgError:
             # Fallback to lstsq
             z, _, _, _ = np.linalg.lstsq(A0tA0, A1_w, rcond=None)
 
-        # v_untreated = -A_0 z
-        v_untreated = -A_0 @ z
+        # v_untreated = -A_0 z (sparse @ dense -> dense)
+        v_untreated = -(A_0 @ z)
         return v_untreated
 
     def _compute_auxiliary_residuals_treated(
@@ -1251,15 +1352,19 @@ class ImputationDiD:
         v_treated: np.ndarray,
     ) -> np.ndarray:
         """
-        Compute auxiliary model residuals for treated observations (Equation 8).
+        Compute v_it-weighted auxiliary residuals for treated obs (Equation 8).
+
+        Computes v_it-weighted tau_tilde_g per Equation 8 of Borusyak et al. (2024):
+        tau_tilde_g = sum(v_it * tau_hat_it) / sum(v_it) within group g.
 
         epsilon_tilde_it = Y_it - alpha_i - beta_t [- X'delta] - tau_tilde_g
         """
         n_1 = len(df_1)
 
         # Compute base residuals (Y - Y_hat(0) = tau_hat)
-        alpha_i = df_1[unit].map(unit_fe).fillna(0.0).values
-        beta_t = df_1[time].map(time_fe).fillna(0.0).values
+        # NaN for missing FE (consistent with _impute_treatment_effects)
+        alpha_i = df_1[unit].map(unit_fe).values.astype(float)  # NaN for missing
+        beta_t = df_1[time].map(time_fe).values.astype(float)   # NaN for missing
         y_hat_0 = grand_mean + alpha_i + beta_t
 
         if delta_hat is not None and covariates:
@@ -1280,13 +1385,27 @@ class ImputationDiD:
         else:
             group_keys = list(range(n_1))  # each obs is its own group
 
-        # Compute weighted average tau within each partition group
-        # tau_tilde_g = sum(v_it * tau_hat_it) / sum(v_it) within group
-        # But per Equation 8, tau_tilde is the simple average within group
+        # Compute v_it-weighted average tau within each partition group (Equation 8)
+        # tau_tilde_g = sum(v_it * tau_hat_it) / sum(v_it) within group g
         group_series = pd.Series(group_keys, index=df_1.index)
         tau_series = pd.Series(tau_hat, index=df_1.index)
+        v_series = pd.Series(v_treated, index=df_1.index)
 
-        tau_tilde_map = tau_series.groupby(group_series).mean()
+        weighted_tau_sum = (v_series * tau_series).groupby(group_series).sum()
+        weight_sum = v_series.groupby(group_series).sum()
+
+        # Guard: zero-weight groups -> their tau_tilde doesn't affect variance
+        # (v_it ~ 0 means these obs contribute nothing to the estimand)
+        # Use simple mean as fallback. This is common for event-study SE computation
+        # where weights target a specific horizon, making other partition groups zero.
+        zero_weight_groups = weight_sum.abs() < 1e-15
+        if zero_weight_groups.any():
+            simple_means = tau_series.groupby(group_series).mean()
+            tau_tilde_map = weighted_tau_sum / weight_sum
+            tau_tilde_map = tau_tilde_map.where(~zero_weight_groups, simple_means)
+        else:
+            tau_tilde_map = weighted_tau_sum / weight_sum
+
         tau_tilde = group_series.map(tau_tilde_map).values
 
         # Auxiliary residuals
@@ -1772,14 +1891,16 @@ class ImputationDiD:
 
         rng = np.random.default_rng(self.seed)
 
-        # Get unique units for multiplier bootstrap
-        all_units = df[unit].unique()
-        n_units = len(all_units)
+        # Get unique clusters for multiplier bootstrap
+        # Uses cluster_var (= self.cluster if set, else unit)
+        cluster_var = self.cluster if self.cluster is not None else unit
+        all_clusters = df[cluster_var].unique()
+        n_clusters = len(all_clusters)
 
-        # Pre-compute unit masks for efficiency
-        unit_indices: Dict[Any, np.ndarray] = {}
-        for u in all_units:
-            unit_indices[u] = np.where(df[unit].values == u)[0]
+        # Pre-compute cluster masks for efficiency
+        cluster_indices: Dict[Any, np.ndarray] = {}
+        for c in all_clusters:
+            cluster_indices[c] = np.where(df[cluster_var].values == c)[0]
 
         # Pre-compute tau_hat and observation weights for each target
         omega_1_mask = df["_treated"]
@@ -1787,7 +1908,6 @@ class ImputationDiD:
         n_1 = int(omega_1_mask.sum())
 
         tau_hat_full = df["_tau_hat"].values  # NaN for untreated
-        cluster_var = self.cluster if self.cluster is not None else unit
 
         # Bootstrap distributions
         boot_overall = np.zeros(self.n_bootstrap)
@@ -1802,13 +1922,13 @@ class ImputationDiD:
             boot_group = {g: np.zeros(self.n_bootstrap) for g in original_group}
 
         for b in range(self.n_bootstrap):
-            # Generate Rademacher weights per unit
-            weights_b = rng.choice([-1.0, 1.0], size=n_units)
+            # Generate Rademacher weights per cluster
+            weights_b = rng.choice([-1.0, 1.0], size=n_clusters)
 
             # Map to observation level
             obs_weights = np.ones(len(df))
-            for i, u in enumerate(all_units):
-                obs_weights[unit_indices[u]] = weights_b[i]
+            for i, c in enumerate(all_clusters):
+                obs_weights[cluster_indices[c]] = weights_b[i]
 
             # Perturbed overall ATT
             treated_tau = tau_hat_full[omega_1_mask.values]
