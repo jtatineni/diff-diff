@@ -1142,39 +1142,70 @@ class TestImputationVsOtherEstimators:
         assert abs(imp_results.overall_att - sa_results.overall_att) < 1.0
 
     def test_shorter_cis_under_homogeneous_effects(self):
-        """Under homogeneous effects, imputation CIs should be shorter."""
-        data = generate_test_data(
-            n_units=300,
-            treatment_effect=2.0,
-            seed=42,
-            dynamic_effects=False,
+        """Monte Carlo: imputation CIs shorter than CS and SA under homogeneous effects.
+
+        Validates carousel claims:
+        - ~50% shorter CIs than Callaway-Sant'Anna
+        - 2-3.5x shorter than Sun-Abraham
+        Theory: Borusyak et al. (2024, Theorem 1) - semi-parametric efficiency bound.
+        """
+        from diff_diff import CallawaySantAnna, SunAbraham
+
+        n_trials = 10
+        imp_vs_cs_ratios = []
+        imp_vs_sa_ratios = []
+
+        for seed in range(n_trials):
+            data = generate_test_data(
+                n_units=200,
+                treatment_effect=2.0,
+                seed=seed,
+                dynamic_effects=False,
+            )
+
+            imp_r = ImputationDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+            cs_r = CallawaySantAnna().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+            sa_r = SunAbraham().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+            imp_w = imp_r.overall_conf_int[1] - imp_r.overall_conf_int[0]
+            cs_w = cs_r.overall_conf_int[1] - cs_r.overall_conf_int[0]
+            sa_w = sa_r.overall_conf_int[1] - sa_r.overall_conf_int[0]
+
+            imp_vs_cs_ratios.append(imp_w / cs_w)
+            imp_vs_sa_ratios.append(imp_w / sa_w)
+
+        median_vs_cs = np.median(imp_vs_cs_ratios)
+        median_vs_sa = np.median(imp_vs_sa_ratios)
+
+        # Imputation CIs should be meaningfully shorter than CS
+        # Carousel claims ~50% shorter; use conservative 0.85 threshold
+        assert median_vs_cs < 0.85, (
+            f"Imputation CIs not shorter than CS: median ratio={median_vs_cs:.3f}"
         )
 
-        imp_est = ImputationDiD()
-        imp_results = imp_est.fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
+        # Imputation CIs should be meaningfully shorter than SA
+        # Carousel claims 2-3.5x shorter; use conservative 0.85 threshold
+        assert median_vs_sa < 0.85, (
+            f"Imputation CIs not shorter than SA: median ratio={median_vs_sa:.3f}"
         )
-
-        from diff_diff import CallawaySantAnna
-
-        cs = CallawaySantAnna()
-        cs_results = cs.fit(
-            data,
-            outcome="outcome",
-            unit="unit",
-            time="time",
-            first_treat="first_treat",
-        )
-
-        imp_ci_width = imp_results.overall_conf_int[1] - imp_results.overall_conf_int[0]
-        cs_ci_width = cs_results.overall_conf_int[1] - cs_results.overall_conf_int[0]
-
-        # Imputation CIs should be shorter (or at least not much longer)
-        assert imp_ci_width < cs_ci_width * 1.5
 
 
 # =============================================================================
