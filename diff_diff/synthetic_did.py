@@ -334,7 +334,10 @@ class SyntheticDiD(DifferenceInDifferences):
         from diff_diff.utils import _compute_noise_level
         noise_level = _compute_noise_level(Y_pre_control)
 
-        # Data-dependent convergence threshold (matches R's 1e-5 * noise.level)
+        # Data-dependent convergence threshold (matches R's 1e-5 * noise.level).
+        # Floor of 1e-5 when noise_level == 0: R would use 0.0, causing FW to
+        # run all max_iter iterations.  The result is equivalent (zero-noise
+        # data has no variation to optimize), but the floor enables early stop.
         min_decrease = 1e-5 * noise_level if noise_level > 0 else 1e-5
 
         # Compute unit weights (Frank-Wolfe with sparsification)

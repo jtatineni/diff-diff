@@ -1420,6 +1420,12 @@ def compute_time_weights(
     np.ndarray
         Time weights of shape (n_pre,) on the simplex.
     """
+    if Y_post_control.shape[0] == 0:
+        raise ValueError(
+            "Y_post_control has no rows. At least one post-treatment period "
+            "is required for time weight computation."
+        )
+
     if HAS_RUST_BACKEND:
         return np.asarray(_rust_compute_time_weights(
             np.ascontiguousarray(Y_pre_control, dtype=np.float64),

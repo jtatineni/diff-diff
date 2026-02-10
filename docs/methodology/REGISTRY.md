@@ -656,7 +656,7 @@ Convergence criterion: stop when objective decrease < min_decrease² (default mi
 - **Negative weights attempted**: Frank-Wolfe operates on the simplex (non-negative, sum-to-1), so weights are always feasible by construction. The step size is clipped to [0, 1] and the move is toward a simplex vertex.
 - **Perfect pre-treatment fit**: Regularization (ζ² ||ω||²) prevents overfitting by penalizing weight concentration.
 - **Single treated unit**: Valid; placebo variance uses jackknife-style permutations of controls.
-- **Noise level with < 2 pre-periods**: Returns 0.0, which makes both zeta_omega and zeta_lambda equal to 0.0 (no regularization).
+- **Noise level with < 2 pre-periods**: Returns 0.0, which makes both zeta_omega and zeta_lambda equal to 0.0 (no regularization). **Note (deviation from R):** `min_decrease` uses a `1e-5` floor when `noise_level == 0` to enable Frank-Wolfe early stopping. R would use `0.0`, causing FW to run all `max_iter` iterations; the result is equivalent since zero-noise data has no variation to optimize.
 - **NaN inference for undefined statistics**: t_stat uses NaN when SE is zero or non-finite; p_value and CI also NaN. Matches CallawaySantAnna NaN convention.
 - **Placebo p-value floor**: `p_value = max(empirical_p, 1/(n_replications + 1))` to avoid reporting exactly zero.
 - **Varying treatment within unit**: Raises `ValueError`. SDID requires block treatment (constant within each unit). Suggests CallawaySantAnna or ImputationDiD for staggered adoption.

@@ -893,3 +893,37 @@ class TestPreTreatmentFitWarning:
             assert len(fit_warnings) == 0, (
                 f"Unexpected pre-treatment fit warning: {fit_warnings[0].message}"
             )
+
+
+class TestMinDecreaseFloor:
+    """Test min_decrease floor when noise_level == 0."""
+
+    def test_floor_equivalence(self):
+        """min_decrease=1e-5 floor vs 0.0 gives same weights on zero-noise data."""
+        # Build zero-noise collapsed-form matrix (N_co=5, T_pre+1=4)
+        # All rows identical → noise_level would be 0
+        np.random.seed(42)
+        Y = np.tile(np.array([1.0, 2.0, 3.0, 4.0]), (5, 1))
+
+        w_floor = _sc_weight_fw(Y, zeta=0.0, intercept=True,
+                                min_decrease=1e-5, max_iter=10000)
+        w_zero = _sc_weight_fw(Y, zeta=0.0, intercept=True,
+                               min_decrease=0.0, max_iter=10000)
+
+        np.testing.assert_allclose(w_floor, w_zero, atol=1e-10,
+                                   err_msg="Floor min_decrease should give same weights as 0.0")
+        # Both should be valid simplex weights
+        assert np.all(w_floor >= -1e-12), "Weights should be non-negative"
+        assert abs(w_floor.sum() - 1.0) < 1e-10, "Weights should sum to 1"
+
+
+class TestEmptyPostGuard:
+    """Test compute_time_weights guard for empty Y_post_control."""
+
+    def test_empty_post_raises(self):
+        """compute_time_weights raises ValueError when Y_post_control has 0 rows."""
+        Y_pre = np.random.randn(4, 5)   # 4 pre-periods, 5 controls
+        Y_post = np.empty((0, 5))        # 0 post-periods
+
+        with pytest.raises(ValueError, match="Y_post_control has no rows"):
+            compute_time_weights(Y_pre, Y_post, zeta_lambda=0.0)
