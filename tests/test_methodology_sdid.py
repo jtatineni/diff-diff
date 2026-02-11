@@ -7,6 +7,7 @@ auto-regularization, sparsification, and correct bootstrap/placebo SE.
 """
 
 import warnings
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -529,6 +530,101 @@ class TestEdgeCases:
             assert np.isnan(results.p_value)
             assert np.isnan(results.conf_int[0])
             assert np.isnan(results.conf_int[1])
+
+    def test_nonfinite_tau_filtered_in_bootstrap(self):
+        """Non-finite tau values are filtered in Python bootstrap path (matches Rust)."""
+        call_count = [0]
+
+        def mock_estimator(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] % 3 == 0:
+                return np.inf
+            return 1.0 + call_count[0] * 0.01
+
+        rng = np.random.default_rng(42)
+        n_pre, n_post, n_control, n_treated = 5, 2, 10, 3
+        Y_pre_c = rng.normal(size=(n_pre, n_control))
+        Y_post_c = rng.normal(size=(n_post, n_control))
+        Y_pre_t = rng.normal(size=(n_pre, n_treated))
+        Y_post_t = rng.normal(size=(n_post, n_treated))
+        unit_weights = np.ones(n_control) / n_control
+        time_weights = np.ones(n_pre) / n_pre
+
+        sdid = SyntheticDiD(n_bootstrap=20, seed=42)
+
+        with patch('diff_diff.synthetic_did.compute_sdid_estimator',
+                   side_effect=mock_estimator), \
+             patch('diff_diff._backend.HAS_RUST_BACKEND', False):
+            se, estimates = sdid._bootstrap_se(
+                Y_pre_c, Y_post_c, Y_pre_t, Y_post_t,
+                unit_weights, time_weights,
+            )
+
+        # All retained estimates must be finite (non-finite filtered out)
+        assert np.all(np.isfinite(estimates)), "Non-finite tau leaked into bootstrap estimates"
+        # Some estimates should have been filtered (every 3rd call returns inf)
+        assert len(estimates) < 20
+
+    def test_nonfinite_tau_filtered_in_placebo(self):
+        """Non-finite tau values are filtered in Python placebo path (matches Rust)."""
+        call_count = [0]
+
+        def mock_estimator(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] % 3 == 0:
+                return np.nan
+            return 2.0 + call_count[0] * 0.01
+
+        rng = np.random.default_rng(42)
+        n_pre, n_post, n_control, n_treated = 5, 2, 15, 3
+        Y_pre_c = rng.normal(size=(n_pre, n_control))
+        Y_post_c = rng.normal(size=(n_post, n_control))
+        Y_pre_t_mean = rng.normal(size=(n_pre,))
+        Y_post_t_mean = rng.normal(size=(n_post,))
+        unit_weights = np.ones(n_control) / n_control
+        time_weights = np.ones(n_pre) / n_pre
+
+        sdid = SyntheticDiD(seed=42)
+
+        with patch('diff_diff.synthetic_did.compute_sdid_estimator',
+                   side_effect=mock_estimator), \
+             patch('diff_diff.synthetic_did.compute_sdid_unit_weights',
+                   return_value=np.ones(n_control - n_treated) / (n_control - n_treated)), \
+             patch('diff_diff.synthetic_did.compute_time_weights',
+                   return_value=np.ones(n_pre) / n_pre), \
+             patch('diff_diff._backend.HAS_RUST_BACKEND', False):
+            se, estimates = sdid._placebo_variance_se(
+                Y_pre_c, Y_post_c, Y_pre_t_mean, Y_post_t_mean,
+                unit_weights, time_weights,
+                n_treated=n_treated,
+                replications=20,
+            )
+
+        # All retained estimates must be finite (non-finite filtered out)
+        assert np.all(np.isfinite(estimates)), "Non-finite tau leaked into placebo estimates"
+        # Some estimates should have been filtered (every 3rd call returns nan)
+        assert len(estimates) < 20
+
+    def test_inf_se_produces_nan_inference(self):
+        """SE=inf should produce NaN t_stat, p_value, and CI."""
+        df = _make_panel(n_control=10, n_treated=3, n_pre=5, n_post=2, seed=42)
+        sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=10, seed=42)
+
+        with patch.object(
+            SyntheticDiD, '_bootstrap_se',
+            return_value=(np.inf, np.array([1.0, 2.0, 3.0])),
+        ):
+            results = sdid.fit(
+                df, outcome="outcome", treatment="treated",
+                unit="unit", time="period",
+                post_periods=[5, 6],
+            )
+
+        assert results.se == np.inf
+        assert np.isnan(results.t_stat)
+        assert np.isnan(results.p_value)
+        assert np.isnan(results.conf_int[0])
+        assert np.isnan(results.conf_int[1])
 
 
 # =============================================================================

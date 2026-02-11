@@ -424,7 +424,7 @@ class SyntheticDiD(DifferenceInDifferences):
             inference_method = "placebo"
 
         # Compute test statistics
-        if se > 0:
+        if np.isfinite(se) and se > 0:
             t_stat = att / se
             # Use placebo distribution for p-value if available
             if len(placebo_effects) > 0:
@@ -438,7 +438,7 @@ class SyntheticDiD(DifferenceInDifferences):
             p_value = np.nan
 
         # Confidence interval
-        if se > 0:
+        if np.isfinite(se) and se > 0:
             conf_int = compute_confidence_interval(att, se, self.alpha)
         else:
             conf_int = (np.nan, np.nan)
@@ -676,7 +676,8 @@ class SyntheticDiD(DifferenceInDifferences):
                     Y_boot_pre_t_mean, Y_boot_post_t_mean,
                     boot_omega, time_weights  # time_weights = original lambda
                 )
-                bootstrap_estimates.append(tau)
+                if np.isfinite(tau):
+                    bootstrap_estimates.append(tau)
 
             except (ValueError, LinAlgError):
                 continue
@@ -899,7 +900,8 @@ class SyntheticDiD(DifferenceInDifferences):
                     pseudo_omega,
                     pseudo_lambda
                 )
-                placebo_estimates.append(tau)
+                if np.isfinite(tau):
+                    placebo_estimates.append(tau)
 
             except (ValueError, LinAlgError, ZeroDivisionError):
                 # Skip failed iterations
