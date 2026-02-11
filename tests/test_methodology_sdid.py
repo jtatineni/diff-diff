@@ -462,6 +462,25 @@ class TestBootstrapSE:
         assert results.se > 0
         assert results.variance_method == "bootstrap"
 
+    def test_bootstrap_with_zeta_overrides(self, ci_params):
+        """Bootstrap SE should work with user-specified zeta overrides."""
+        df = _make_panel(n_control=20, n_treated=3, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sdid = SyntheticDiD(
+            variance_method="bootstrap", n_bootstrap=n_boot,
+            zeta_omega=99.0, zeta_lambda=0.5, seed=42,
+        )
+        results = sdid.fit(
+            df, outcome="outcome", treatment="treated",
+            unit="unit", time="period",
+            post_periods=list(range(5, 8)),
+        )
+
+        assert results.zeta_omega == 99.0
+        assert results.zeta_lambda == 0.5
+        assert results.variance_method == "bootstrap"
+        assert results.se > 0
+
 
 # =============================================================================
 # Edge Cases
@@ -581,8 +600,6 @@ class TestEdgeCases:
         Y_post_c = rng.normal(size=(n_post, n_control))
         Y_pre_t_mean = rng.normal(size=(n_pre,))
         Y_post_t_mean = rng.normal(size=(n_post,))
-        unit_weights = np.ones(n_control) / n_control
-        time_weights = np.ones(n_pre) / n_pre
 
         sdid = SyntheticDiD(seed=42)
 
@@ -595,7 +612,6 @@ class TestEdgeCases:
              patch('diff_diff._backend.HAS_RUST_BACKEND', False):
             se, estimates = sdid._placebo_variance_se(
                 Y_pre_c, Y_post_c, Y_pre_t_mean, Y_post_t_mean,
-                unit_weights, time_weights,
                 n_treated=n_treated,
                 replications=20,
             )

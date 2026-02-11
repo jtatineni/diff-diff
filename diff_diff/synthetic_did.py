@@ -413,8 +413,6 @@ class SyntheticDiD(DifferenceInDifferences):
                 Y_post_control,
                 Y_pre_treated_mean,
                 Y_post_treated_mean,
-                unit_weights,
-                time_weights,
                 n_treated=len(treated_units),
                 zeta_omega=zeta_omega,
                 zeta_lambda=zeta_lambda,
@@ -729,8 +727,6 @@ class SyntheticDiD(DifferenceInDifferences):
         Y_post_control: np.ndarray,
         Y_pre_treated_mean: np.ndarray,
         Y_post_treated_mean: np.ndarray,
-        unit_weights: np.ndarray,
-        time_weights: np.ndarray,
         n_treated: int,
         zeta_omega: float = 0.0,
         zeta_lambda: float = 0.0,
@@ -762,10 +758,6 @@ class SyntheticDiD(DifferenceInDifferences):
             Mean treated outcomes in pre-treatment periods, shape (n_pre,).
         Y_post_treated_mean : np.ndarray
             Mean treated outcomes in post-treatment periods, shape (n_post,).
-        unit_weights : np.ndarray
-            Original unit weights from main estimation, shape (n_control,).
-        time_weights : np.ndarray
-            Time weights from main estimation, shape (n_pre,).
         n_treated : int
             Number of treated units in the original estimation.
         zeta_omega : float
