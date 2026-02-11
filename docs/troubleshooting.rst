@@ -84,7 +84,7 @@ Estimation Errors
    # Or use fewer fixed effects
 
    # For SyntheticDiD, increase regularization
-   sdid = SyntheticDiD(lambda_reg=1e-4)  # default is 1e-6
+   sdid = SyntheticDiD(zeta_omega=1e-4)  # increase unit weight regularization
 
 "Bootstrap iterations failed" warning
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -102,10 +102,10 @@ Estimation Errors
 .. code-block:: python
 
    # Increase regularization
-   sdid = SyntheticDiD(lambda_reg=1e-4, n_bootstrap=500)
+   sdid = SyntheticDiD(zeta_omega=1e-4, zeta_lambda=1e-4, n_bootstrap=500)
 
    # Or use placebo-based inference instead
-   sdid = SyntheticDiD(n_bootstrap=0)  # Uses placebo inference
+   sdid = SyntheticDiD(variance_method="placebo")  # Uses placebo inference
 
    # Ensure sufficient pre-treatment periods (recommend >= 4)
 

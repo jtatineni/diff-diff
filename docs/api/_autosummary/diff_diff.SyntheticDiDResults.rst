@@ -31,7 +31,6 @@
    
       ~SyntheticDiDResults.alpha
       ~SyntheticDiDResults.is_significant
-      ~SyntheticDiDResults.lambda_reg
       ~SyntheticDiDResults.placebo_effects
       ~SyntheticDiDResults.pre_treatment_fit
       ~SyntheticDiDResults.significance_stars
@@ -47,5 +46,10 @@
       ~SyntheticDiDResults.time_weights
       ~SyntheticDiDResults.pre_periods
       ~SyntheticDiDResults.post_periods
+      ~SyntheticDiDResults.variance_method
+      ~SyntheticDiDResults.noise_level
+      ~SyntheticDiDResults.zeta_omega
+      ~SyntheticDiDResults.zeta_lambda
+      ~SyntheticDiDResults.n_bootstrap
    
    
