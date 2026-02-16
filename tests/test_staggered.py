@@ -102,6 +102,29 @@ class TestCallawaySantAnna:
         # Effect should be close to zero
         assert abs(results.overall_att) < 3 * results.overall_se
 
+    def test_never_treated_inf_encoding(self):
+        """Test that first_treat=np.inf is handled as never-treated, not as a cohort."""
+        data = generate_staggered_data(n_units=200, n_periods=10, n_cohorts=3, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=0)
+        results_zero = cs.fit(
+            data.copy(), outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        # Re-encode never-treated from 0 to np.inf (cast to float first for pandas compat)
+        data_inf = data.copy()
+        data_inf["first_treat"] = data_inf["first_treat"].astype(float)
+        data_inf.loc[data_inf["first_treat"] == 0, "first_treat"] = np.inf
+
+        results_inf = cs.fit(
+            data_inf, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        # Results should be identical
+        assert np.isclose(results_inf.overall_att, results_zero.overall_att), (
+            f"ATT differs: inf={results_inf.overall_att}, zero={results_zero.overall_att}"
+        )
+
     def test_event_study_aggregation(self):
         """Test event study aggregation."""
         data = generate_staggered_data()

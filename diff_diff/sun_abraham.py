@@ -456,9 +456,9 @@ class SunAbraham:
         covariates : list, optional
             List of covariate column names to include in regression.
         min_pre_periods : int, default=1
-            Minimum number of pre-treatment periods to include in event study.
+            **Deprecated**: Accepted but ignored. Will be removed in a future version.
         min_post_periods : int, default=1
-            Minimum number of post-treatment periods to include in event study.
+            **Deprecated**: Accepted but ignored. Will be removed in a future version.
 
         Returns
         -------
@@ -470,6 +470,22 @@ class SunAbraham:
         ValueError
             If required columns are missing or data validation fails.
         """
+        # Deprecation warnings for unimplemented parameters
+        if min_pre_periods != 1:
+            warnings.warn(
+                "min_pre_periods is not yet implemented and will be ignored. "
+                "This parameter will be removed in a future version.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if min_post_periods != 1:
+            warnings.warn(
+                "min_post_periods is not yet implemented and will be ignored. "
+                "This parameter will be removed in a future version.",
+                FutureWarning,
+                stacklevel=2,
+            )
+
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]
         if covariates:
@@ -486,12 +502,14 @@ class SunAbraham:
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
 
+        # Never-treated indicator (must precede treatment_groups to exclude np.inf)
+        df["_never_treated"] = (df[first_treat] == 0) | (df[first_treat] == np.inf)
+        # Normalize np.inf → 0 so all downstream `> 0` checks exclude never-treated
+        df.loc[df[first_treat] == np.inf, first_treat] = 0
+
         # Identify groups and time periods
         time_periods = sorted(df[time].unique())
         treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
-
-        # Never-treated indicator
-        df["_never_treated"] = (df[first_treat] == 0) | (df[first_treat] == np.inf)
 
         # Get unique units
         unit_info = (
@@ -533,9 +551,9 @@ class SunAbraham:
 
         all_rel_times_sorted = sorted(all_rel_times)
 
-        # Filter to reasonable range
-        min_rel = max(min(all_rel_times_sorted), -20)  # cap at -20
-        max_rel = min(max(all_rel_times_sorted), 20)   # cap at +20
+        # Use full range of relative times (no artificial truncation, matches R's fixest::sunab())
+        min_rel = min(all_rel_times_sorted)
+        max_rel = max(all_rel_times_sorted)
 
         # Reference period: last pre-treatment period (typically -1)
         self._reference_period = -1 - self.anticipation
@@ -765,12 +783,18 @@ class SunAbraham:
 
         # Fit OLS using LinearRegression helper (more stable than manual X'X inverse)
         cluster_ids = df_demeaned[cluster_var].values
+
+        # Degrees of freedom adjustment for absorbed unit and time fixed effects
+        n_units_fe = df[unit].nunique()
+        n_times_fe = df[time].nunique()
+        df_adj = n_units_fe + n_times_fe - 1
+
         reg = LinearRegression(
             include_intercept=False,  # Already demeaned, no intercept needed
             robust=True,
             cluster_ids=cluster_ids,
             rank_deficient_action=self.rank_deficient_action,
-        ).fit(X, y)
+        ).fit(X, y, df_adjustment=df_adj)
 
         coefficients = reg.coefficients_
         vcov = reg.vcov_
@@ -821,7 +845,8 @@ class SunAbraham:
 
         β_e = Σ_g w_{g,e} × δ_{g,e}
 
-        where w_{g,e} is the share of cohort g among treated units at relative time e.
+        where w_{g,e} = n_{g,e} / Σ_g n_{g,e} is the share of observations from cohort g
+        at event-time e among all treated observations at that event-time.
 
         Returns
         -------
@@ -833,9 +858,8 @@ class SunAbraham:
         event_study_effects: Dict[int, Dict[str, Any]] = {}
         cohort_weights: Dict[int, Dict[Any, float]] = {}
 
-        # Get cohort sizes
-        unit_cohorts = df.groupby(unit)[first_treat].first()
-        cohort_sizes = unit_cohorts[unit_cohorts > 0].value_counts().to_dict()
+        # Pre-compute per-event-time observation counts: n_{g,e}
+        event_time_counts = df[df[first_treat] > 0].groupby([first_treat, "_rel_time"]).size()
 
         for e in rel_periods:
             # Get cohorts that have observations at this relative time
@@ -847,13 +871,13 @@ class SunAbraham:
             if not cohorts_at_e:
                 continue
 
-            # Compute IW weights: share of each cohort among those observed at e
+            # Compute IW weights: n_{g,e} / Σ_g n_{g,e}
             weights = {}
             total_size = 0
             for g in cohorts_at_e:
-                n_g = cohort_sizes.get(g, 0)
-                weights[g] = n_g
-                total_size += n_g
+                n_g_e = event_time_counts.get((g, e), 0)
+                weights[g] = n_g_e
+                total_size += n_g_e
 
             if total_size == 0:
                 continue
@@ -915,7 +939,7 @@ class SunAbraham:
         ]
 
         if not post_effects:
-            return 0.0, 0.0
+            return np.nan, np.nan
 
         # Weight by number of treated observations at each relative time
         post_weights = []
@@ -948,7 +972,13 @@ class SunAbraham:
                         overall_weights_by_coef[key] += period_weight * cw
 
         if not overall_weights_by_coef:
-            # Fallback to simple variance calculation
+            # Fallback to simplified variance that ignores covariances between periods
+            warnings.warn(
+                "Could not construct full weight vector for overall ATT SE. "
+                "Using simplified variance that ignores covariances between periods.",
+                UserWarning,
+                stacklevel=2,
+            )
             overall_var = float(
                 np.sum((post_weights ** 2) * np.array([eff["se"] ** 2 for _, eff in post_effects]))
             )
@@ -1029,6 +1059,7 @@ class SunAbraham:
                 df_b[time] - df_b[first_treat],
                 np.nan
             )
+            # np.inf was normalized to 0 in fit(), so the np.inf check is defensive only
             df_b["_never_treated"] = (
                 (df_b[first_treat] == 0) | (df_b[first_treat] == np.inf)
             )
@@ -1113,11 +1144,16 @@ class SunAbraham:
             event_study_p_values[e] = p_value
 
         # Overall ATT statistics
-        overall_se = float(np.std(bootstrap_overall, ddof=1))
-        overall_ci = self._compute_percentile_ci(bootstrap_overall, self.alpha)
-        overall_p = self._compute_bootstrap_pvalue(
-            original_overall_att, bootstrap_overall
-        )
+        if not np.isfinite(original_overall_att):
+            overall_se = np.nan
+            overall_ci = (np.nan, np.nan)
+            overall_p = np.nan
+        else:
+            overall_se = float(np.std(bootstrap_overall, ddof=1))
+            overall_ci = self._compute_percentile_ci(bootstrap_overall, self.alpha)
+            overall_p = self._compute_bootstrap_pvalue(
+                original_overall_att, bootstrap_overall
+            )
 
         return SABootstrapResults(
             n_bootstrap=self.n_bootstrap,

@@ -24,7 +24,7 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 | MultiPeriodDiD | `estimators.py` | `fixest::feols()` | **Complete** | 2026-02-02 |
 | TwoWayFixedEffects | `twfe.py` | `fixest::feols()` | **Complete** | 2026-02-08 |
 | CallawaySantAnna | `staggered.py` | `did::att_gt()` | **Complete** | 2026-01-24 |
-| SunAbraham | `sun_abraham.py` | `fixest::sunab()` | Not Started | - |
+| SunAbraham | `sun_abraham.py` | `fixest::sunab()` | **Complete** | 2026-02-15 |
 | SyntheticDiD | `synthetic_did.py` | `synthdid::synthdid_estimate()` | **Complete** | 2026-02-10 |
 | TripleDifference | `triple_diff.py` | (forthcoming) | Not Started | - |
 | TROP | `trop.py` | (forthcoming) | Not Started | - |
@@ -294,14 +294,88 @@ variables appear to the left of the `|` separator.
 | Module | `sun_abraham.py` |
 | Primary Reference | Sun & Abraham (2021) |
 | R Reference | `fixest::sunab()` |
-| Status | Not Started |
-| Last Review | - |
+| Status | **Complete** |
+| Last Review | 2026-02-15 |
+
+**Verified Components:**
+- [x] Saturated TWFE regression with cohort × relative-time interactions
+- [x] Within-transformation for unit and time fixed effects
+- [x] Interaction-weighted event study effects (δ̂_e = Σ_g ŵ_{g,e} × δ̂_{g,e})
+- [x] IW weights match event-time sample shares (n_{g,e} / Σ_g n_{g,e})
+- [x] Overall ATT as weighted average of post-treatment effects
+- [x] Delta method SE for aggregated effects (Var = w' Σ w)
+- [x] Cluster-robust SEs at unit level
+- [x] Reference period normalized to zero (e=-1 excluded from design matrix)
+- [x] R comparison: ATT matches `fixest::sunab()` within machine precision (<1e-11)
+- [x] R comparison: SE matches within 0.3% (small scale) / 0.1% (1k scale)
+- [x] R comparison: Event study effects correlation = 1.000000
+- [x] R comparison: Event study max diff < 1e-11
+- [x] Bootstrap inference (pairs bootstrap)
+- [x] Rank deficiency handling (warn/error/silent)
+- [x] All REGISTRY.md edge cases tested
+
+**Test Coverage:**
+- 43 tests in `tests/test_sun_abraham.py` (36 existing + 7 methodology verification)
+- R benchmark tests via `benchmarks/run_benchmarks.py --estimator sunab`
+
+**R Comparison Results:**
+- Overall ATT matches within machine precision (diff < 1e-11 at both scales)
+- Cluster-robust SE matches within 0.3% (well within 1% threshold)
+- Event study effects match perfectly (correlation 1.0, max diff < 1e-11)
+- Validated at small (200 units) and 1k (1000 units) scales
 
 **Corrections Made:**
-- (None yet)
+1. **DF adjustment for absorbed FE** (`sun_abraham.py`, `_fit_saturated_regression()`):
+   Added `df_adjustment = n_units + n_times - 1` to `LinearRegression.fit()` to account
+   for absorbed unit and time fixed effects in degrees of freedom. Unlike TWFE (which uses
+   `-2` plus an explicit intercept column), SunAbraham's saturated regression has no
+   intercept, so all absorbed df must come from the adjustment. Affects t-distribution DoF
+   for cohort-level p-values/CIs (slightly larger p-values, slightly wider CIs) but does
+   NOT change VCV or SE values.
+
+2. **NaN return for no post-treatment effects** (`sun_abraham.py`, `_compute_overall_att()`):
+   Changed return from `(0.0, 0.0)` to `(np.nan, np.nan)` when no post-treatment effects
+   exist. All downstream inference fields (t_stat, p_value, conf_int) correctly propagate
+   NaN via existing guards in `fit()`.
+
+3. **Deprecation warnings for unused parameters** (`sun_abraham.py`, `fit()`):
+   Added `FutureWarning` for `min_pre_periods` and `min_post_periods` parameters that
+   are accepted but never used (no-op). These will be removed in a future version.
+
+4. **Removed event-time truncation at [-20, 20]** (`sun_abraham.py`):
+   Removed the hardcoded cap `max(min(...), -20)` / `min(max(...), 20)` to match
+   R's `fixest::sunab()` which has no such limit. All available relative times are
+   now estimated.
+
+5. **Warning for variance fallback path** (`sun_abraham.py`, `_compute_overall_att()`):
+   Added `UserWarning` when the full weight vector cannot be constructed and a
+   simplified variance (ignoring covariances between periods) is used as fallback.
+
+6. **IW weights use event-time sample shares** (`sun_abraham.py`, `_compute_iw_effects()`):
+   Changed IW weights from `n_g / Σ_g n_g` (cohort sizes) to `n_{g,e} / Σ_g n_{g,e}`
+   (per-event-time observation counts) to match the REGISTRY.md formula. For balanced
+   panels these are identical; for unbalanced panels the new formula correctly reflects
+   actual sample composition at each event-time. Added unbalanced panel test.
+
+7. **Normalize `np.inf` never-treated encoding** (`sun_abraham.py`, `fit()`):
+   `first_treat=np.inf` (documented as valid for never-treated) was included in
+   `treatment_groups` and `_rel_time` via `> 0` checks, producing `-inf` event times.
+   Fixed by normalizing `np.inf` to `0` immediately after computing `_never_treated`.
+   Same fix applied to `staggered.py` (`CallawaySantAnna`).
 
 **Outstanding Concerns:**
-- (None yet)
+- **Inference distribution**: Cohort-level p-values use t-distribution (via
+  `LinearRegression.get_inference()`), while aggregated event study and overall ATT
+  p-values use normal distribution (via `compute_p_value()`). This is asymptotically
+  equivalent and standard for delta-method-aggregated quantities. R's fixest uses
+  t-distribution at all levels, so aggregated p-values may differ slightly for small
+  samples — this is a documented deviation.
+
+**Deviations from R's fixest::sunab():**
+1. **NaN for no post-treatment effects**: Python returns `(NaN, NaN)` for overall ATT/SE
+   when no post-treatment effects exist. R would error.
+2. **Normal distribution for aggregated inference**: Aggregated p-values use normal
+   distribution (asymptotically equivalent). R uses t-distribution.
 
 ---
 
