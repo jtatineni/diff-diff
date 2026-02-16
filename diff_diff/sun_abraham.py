@@ -508,6 +508,8 @@ class SunAbraham:
 
         # Never-treated indicator
         df["_never_treated"] = (df[first_treat] == 0) | (df[first_treat] == np.inf)
+        # Normalize np.inf → 0 so all downstream `> 0` checks exclude never-treated
+        df.loc[df[first_treat] == np.inf, first_treat] = 0
 
         # Get unique units
         unit_info = (
@@ -1057,6 +1059,7 @@ class SunAbraham:
                 df_b[time] - df_b[first_treat],
                 np.nan
             )
+            # np.inf was normalized to 0 in fit(), so the np.inf check is defensive only
             df_b["_never_treated"] = (
                 (df_b[first_treat] == 0) | (df_b[first_treat] == np.inf)
             )

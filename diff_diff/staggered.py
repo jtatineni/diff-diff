@@ -415,6 +415,7 @@ class CallawaySantAnna(
             cohort_masks[g] = (unit_cohorts == g)
 
         # Never-treated mask
+        # np.inf was normalized to 0 in fit(), so the np.inf check is defensive only
         never_treated_mask = (unit_cohorts == 0) | (unit_cohorts == np.inf)
 
         # Pre-compute covariate matrices by time period if needed
@@ -645,6 +646,8 @@ class CallawaySantAnna(
 
         # Never-treated indicator (first_treat = 0 or inf)
         df['_never_treated'] = (df[first_treat] == 0) | (df[first_treat] == np.inf)
+        # Normalize np.inf → 0 so all downstream `> 0` checks exclude never-treated
+        df.loc[df[first_treat] == np.inf, first_treat] = 0
 
         # Get unique units
         unit_info = df.groupby(unit).agg({

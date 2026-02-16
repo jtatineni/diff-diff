@@ -1366,3 +1366,39 @@ class TestSunAbrahamMethodology:
             assert abs(w - expected_w) < 1e-10, (
                 f"Weight for cohort {g} at e={affected_e}: got {w}, expected {expected_w}"
             )
+
+    def test_never_treated_inf_encoding(self):
+        """Test that first_treat=np.inf is handled as never-treated, not as a cohort."""
+        data = generate_staggered_data(n_units=200, n_periods=10, n_cohorts=3, seed=42)
+
+        # Run with first_treat=0 as baseline
+        sa = SunAbraham(n_bootstrap=0)
+        results_zero = sa.fit(
+            data.copy(), outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        # Re-encode never-treated from 0 to np.inf
+        data_inf = data.copy()
+        data_inf.loc[data_inf["first_treat"] == 0, "first_treat"] = np.inf
+
+        results_inf = sa.fit(
+            data_inf, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        # np.inf must not appear as a cohort in weights
+        for e, weights in results_inf.cohort_weights.items():
+            assert np.inf not in weights, (
+                f"np.inf found as cohort key in weights at e={e}"
+            )
+
+        # No ±inf in event study periods
+        for e in results_inf.event_study_effects.keys():
+            assert np.isfinite(e), f"Non-finite event time {e} in event study"
+
+        # Results should be identical to first_treat=0 encoding
+        assert np.isclose(results_inf.overall_att, results_zero.overall_att), (
+            f"ATT differs: inf={results_inf.overall_att}, zero={results_zero.overall_att}"
+        )
+        assert np.isclose(results_inf.overall_se, results_zero.overall_se), (
+            f"SE differs: inf={results_inf.overall_se}, zero={results_zero.overall_se}"
+        )

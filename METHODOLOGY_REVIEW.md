@@ -357,6 +357,12 @@ variables appear to the left of the `|` separator.
    panels these are identical; for unbalanced panels the new formula correctly reflects
    actual sample composition at each event-time. Added unbalanced panel test.
 
+7. **Normalize `np.inf` never-treated encoding** (`sun_abraham.py`, `fit()`):
+   `first_treat=np.inf` (documented as valid for never-treated) was included in
+   `treatment_groups` and `_rel_time` via `> 0` checks, producing `-inf` event times.
+   Fixed by normalizing `np.inf` to `0` immediately after computing `_never_treated`.
+   Same fix applied to `staggered.py` (`CallawaySantAnna`).
+
 **Outstanding Concerns:**
 - **Inference distribution**: Cohort-level p-values use t-distribution (via
   `LinearRegression.get_inference()`), while aggregated event study and overall ATT
