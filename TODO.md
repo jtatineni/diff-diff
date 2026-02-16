@@ -46,7 +46,7 @@ All 7 t_stat locations fixed (diagnostics.py, sun_abraham.py, triple_diff.py) --
 
 ### Migrate Existing Inference Call Sites to `safe_inference()`
 
-`safe_inference()` was added to `diff_diff/utils.py` to compute t_stat, p_value, and CI together with a NaN gate at the top. It is now the prescribed pattern for all new code (see CLAUDE.md design pattern #7). However, ~25 existing inline inference computations across 11 files have **not** been migrated yet.
+`safe_inference()` was added to `diff_diff/utils.py` to compute t_stat, p_value, and CI together with a NaN gate at the top. It is now the prescribed pattern for all new code (see CLAUDE.md design pattern #7). However, ~26 existing inline inference computations across 12 files have **not** been migrated yet.
 
 **Files with inline inference to migrate:**
 
@@ -62,12 +62,15 @@ All 7 t_stat locations fixed (diagnostics.py, sun_abraham.py, triple_diff.py) --
 | `diagnostics.py` | 2 (lines 665, 786) |
 | `synthetic_did.py` | 1 (line 426) |
 | `trop.py` | 2 (lines 1474, 2054) |
+| `utils.py` | 1 (line 641) |
 | `linalg.py` | 1 (line 1310) |
 
 **How to find them:**
 ```bash
-grep -n "t_stat\s*=\s*[^#]*/\|overall_t\s*=\s*[^#]*/" diff_diff/*.py | grep -v safe_inference | grep -v "^.*:#"
+grep -En "(t_stat|overall_t)\s*=\s*[^#]*/|\[.t_stat.\]\s*=\s*[^#]*/" diff_diff/*.py | grep -v "def safe_inference"
 ```
+
+**Note**: This command has one false positive (`utils.py:178`, inside the `safe_inference()` body) and misses multi-line expressions (e.g., `sun_abraham.py:660-661`). The table above is the authoritative list.
 
 **Migration pattern:**
 ```python
@@ -93,7 +96,7 @@ Deferred items from PR reviews that were not addressed before merge.
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
-| TwoStageDiD & ImputationDiD bootstrap hardcodes Rademacher only; docs/Registry claim Mammen/Webb | `two_stage.py:1860`, `imputation.py:2363` | #156, #141 | Medium |
+| TwoStageDiD & ImputationDiD bootstrap hardcodes Rademacher only; no `bootstrap_weights` parameter unlike CallawaySantAnna | `two_stage.py:1860`, `imputation.py:2363` | #156, #141 | Medium |
 | TwoStageDiD GMM score logic duplicated between analytic/bootstrap with inconsistent NaN/overflow handling | `two_stage.py:1454-1784` | #156 | Medium |
 | ImputationDiD weight construction duplicated between aggregation and bootstrap (drift risk) -- has explicit code comment acknowledging duplication | `imputation.py:1777-1786`, `imputation.py:2216-2221` | #141 | Medium |
 | ImputationDiD dense `(A0'A0).toarray()` scales O((U+T+K)^2), OOM risk on large panels | `imputation.py:1564` | #141 | Medium |
