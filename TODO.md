@@ -75,7 +75,7 @@ Several estimators return `0.0` for t-statistic when SE is 0 or undefined. This 
 
 **How to find them:**
 ```bash
-grep -n "t_stat\s*=\s*[^#]*/ *se" diff_diff/*.py | grep -v "safe_inference"
+grep -n "t_stat[[:space:]]*=[[:space:]]*[^#]*/ *se" diff_diff/*.py | grep -v "safe_inference"
 ```
 
 **Migration pattern:**

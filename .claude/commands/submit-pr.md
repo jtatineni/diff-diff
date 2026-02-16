@@ -139,8 +139,8 @@ Determine if this is a fork-based workflow:
    ```
 
    If methodology files are present, run Checks A and B from `/pre-merge-check` Section 2.1 on those files:
-   - **Check A**: `grep -n "t_stat\s*=\s*[^#]*/ *se" <methodology-files> | grep -v "safe_inference"`
-   - **Check B**: `grep -En "if.*(se|SE).*>.*0.*else\s+(0\.0|0)\b" <methodology-files>`
+   - **Check A**: `grep -n "t_stat[[:space:]]*=[[:space:]]*[^#]*/ *se" <methodology-files> | grep -v "safe_inference"`
+   - **Check B**: `grep -En "if.*(se|SE).*>.*0.*else[[:space:]]+(0\.0|0)" <methodology-files>`
 
    If warnings are found:
    ```

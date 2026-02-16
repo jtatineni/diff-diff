@@ -33,13 +33,13 @@ If any methodology files changed, run these pattern checks on the **changed meth
 
 **Check A — Inline inference computation**:
 ```bash
-grep -n "t_stat\s*=\s*[^#]*/ *se" <changed-methodology-files> | grep -v "safe_inference"
+grep -n "t_stat[[:space:]]*=[[:space:]]*[^#]*/ *se" <changed-methodology-files> | grep -v "safe_inference"
 ```
 Flag each match: "Consider using `safe_inference()` from `diff_diff.utils` instead of inline t_stat computation."
 
 **Check B — Zero-SE fallback to 0.0 instead of NaN**:
 ```bash
-grep -En "if.*(se|SE).*>.*0.*else\s+(0\.0|0)\b" <changed-methodology-files>
+grep -En "if.*(se|SE).*>.*0.*else[[:space:]]+(0\.0|0)" <changed-methodology-files>
 ```
 Flag each match: "SE=0 should produce NaN, not 0.0, for inference fields."
 
