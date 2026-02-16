@@ -1395,6 +1395,11 @@ class TestSunAbrahamMethodology:
         for e in results_inf.event_study_effects.keys():
             assert np.isfinite(e), f"Non-finite event time {e} in event study"
 
+        # np.inf must not appear in results.groups
+        assert np.inf not in results_inf.groups, (
+            f"np.inf found in results.groups: {results_inf.groups}"
+        )
+
         # Results should be identical to first_treat=0 encoding
         assert np.isclose(results_inf.overall_att, results_zero.overall_att), (
             f"ATT differs: inf={results_inf.overall_att}, zero={results_zero.overall_att}"
@@ -1402,3 +1407,19 @@ class TestSunAbrahamMethodology:
         assert np.isclose(results_inf.overall_se, results_zero.overall_se), (
             f"SE differs: inf={results_inf.overall_se}, zero={results_zero.overall_se}"
         )
+
+    def test_all_never_treated_inf_raises(self):
+        """Test that all-never-treated data with np.inf encoding raises ValueError."""
+        data = generate_staggered_data(n_units=100, n_periods=10, n_cohorts=3, seed=42)
+        # Set ALL units to never-treated via np.inf
+        data["first_treat"] = np.inf
+
+        sa = SunAbraham(n_bootstrap=0)
+        with pytest.raises(ValueError, match="No treated units found"):
+            sa.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )

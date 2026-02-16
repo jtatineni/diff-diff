@@ -502,14 +502,14 @@ class SunAbraham:
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
 
-        # Identify groups and time periods
-        time_periods = sorted(df[time].unique())
-        treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
-
-        # Never-treated indicator
+        # Never-treated indicator (must precede treatment_groups to exclude np.inf)
         df["_never_treated"] = (df[first_treat] == 0) | (df[first_treat] == np.inf)
         # Normalize np.inf → 0 so all downstream `> 0` checks exclude never-treated
         df.loc[df[first_treat] == np.inf, first_treat] = 0
+
+        # Identify groups and time periods
+        time_periods = sorted(df[time].unique())
+        treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
 
         # Get unique units
         unit_info = (

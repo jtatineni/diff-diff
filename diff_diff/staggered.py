@@ -640,14 +640,14 @@ class CallawaySantAnna(
         # This avoids hardcoding column names in internal methods
         df['first_treat'] = df[first_treat]
 
-        # Identify groups and time periods
-        time_periods = sorted(df[time].unique())
-        treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
-
-        # Never-treated indicator (first_treat = 0 or inf)
+        # Never-treated indicator (must precede treatment_groups to exclude np.inf)
         df['_never_treated'] = (df[first_treat] == 0) | (df[first_treat] == np.inf)
         # Normalize np.inf → 0 so all downstream `> 0` checks exclude never-treated
         df.loc[df[first_treat] == np.inf, first_treat] = 0
+
+        # Identify groups and time periods
+        time_periods = sorted(df[time].unique())
+        treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
 
         # Get unique units
         unit_info = df.groupby(unit).agg({
