@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-02-17
+
+### Added
+- Tutorial notebook for Two-Stage DiD (Gardner 2022) (`docs/tutorials/12_two_stage_did.ipynb`)
+
+### Changed
+- Module splits for large files: ImputationDiD, TwoStageDiD, and TROP each split into separate results and bootstrap submodules
+- Migrated remaining inline inference computations to `safe_inference()` utility
+- Replaced `np.dot()` calls with `@` operator across codebase
+- Updated TODO.md and ROADMAP.md for accuracy post-v2.4.0
+
+### Fixed
+- Matplotlib import guards added to tutorials 11 and 12
+- Various bug fixes from code quality cleanup (diagnostics, estimators, linalg, staggered, sun_abraham, synthetic_did, triple_diff)
+
 ## [2.4.0] - 2026-02-16
 
 ### Added
@@ -739,6 +754,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.4.1]: https://github.com/igerber/diff-diff/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/igerber/diff-diff/compare/v2.3.2...v2.4.0
 [2.3.2]: https://github.com/igerber/diff-diff/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/igerber/diff-diff/compare/v2.3.0...v2.3.1
