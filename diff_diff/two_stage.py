@@ -29,6 +29,11 @@ import pandas as pd
 from scipy import sparse
 from scipy.sparse.linalg import factorized as sparse_factorized
 
+# Maximum number of elements before falling back to per-column sparse aggregation.
+# 10M float64 elements ≈ 80 MB peak allocation. Above this, per-column .getcol()
+# trades throughput for bounded memory.
+_SPARSE_DENSE_THRESHOLD = 10_000_000
+
 from diff_diff.linalg import solve_ols
 from diff_diff.two_stage_bootstrap import TwoStageDiDBootstrapMixin
 from diff_diff.two_stage_results import TwoStageBootstrapResults, TwoStageDiDResults  # noqa: F401 (re-export)
@@ -1222,15 +1227,19 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         unique_clusters, cluster_indices = np.unique(cluster_ids, return_inverse=True)
         G = len(unique_clusters)
 
-        # Convert sparse to dense once for efficient cluster aggregation.
-        # Total memory touched is identical to per-column .getcol().toarray();
-        # only peak allocation differs (full matrix vs one column at a time).
-        # For panels with >100K FE columns, consider reverting to per-column
-        # .getcol() to limit peak memory.
-        weighted_X10_dense = weighted_X10.toarray()
+        n_elements = weighted_X10.shape[0] * weighted_X10.shape[1]
         c_by_cluster = np.zeros((G, p))
-        for j_col in range(p):
-            np.add.at(c_by_cluster[:, j_col], cluster_indices, weighted_X10_dense[:, j_col])
+        if n_elements > _SPARSE_DENSE_THRESHOLD:
+            # Per-column path: limits peak memory for large FE matrices
+            weighted_X10_csc = weighted_X10.tocsc()
+            for j_col in range(p):
+                col_data = weighted_X10_csc.getcol(j_col).toarray().ravel()
+                np.add.at(c_by_cluster[:, j_col], cluster_indices, col_data)
+        else:
+            # Dense path: faster for moderate-size matrices
+            weighted_X10_dense = weighted_X10.toarray()
+            for j_col in range(p):
+                np.add.at(c_by_cluster[:, j_col], cluster_indices, weighted_X10_dense[:, j_col])
 
         # 3. Per-cluster Stage 2 scores: X'_{2g} eps_{2g}
         weighted_X2 = X_2 * eps_2[:, None]  # (n x k) dense

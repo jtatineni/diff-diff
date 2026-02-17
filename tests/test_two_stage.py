@@ -1145,3 +1145,35 @@ class TestTwoStageDiDConvenience:
         results.print_summary()
         captured = capsys.readouterr()
         assert "Two-Stage DiD" in captured.out
+
+    def test_sparse_fallback_path(self):
+        """Size guard falls back to per-column path and produces same results."""
+        import diff_diff.two_stage as ts_mod
+
+        data = generate_test_data(n_units=50, n_periods=6, seed=42)
+
+        # Run with normal (high) threshold — uses dense path
+        result_dense = TwoStageDiD().fit(
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        # Patch threshold to 1 to force per-column path on all data
+        orig = ts_mod._SPARSE_DENSE_THRESHOLD
+        try:
+            ts_mod._SPARSE_DENSE_THRESHOLD = 1
+            result_sparse = TwoStageDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        finally:
+            ts_mod._SPARSE_DENSE_THRESHOLD = orig
+
+        np.testing.assert_allclose(
+            result_dense.overall_att, result_sparse.overall_att, rtol=1e-10
+        )
+        np.testing.assert_allclose(
+            result_dense.overall_se, result_sparse.overall_se, rtol=1e-10
+        )

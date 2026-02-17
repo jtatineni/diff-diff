@@ -2064,8 +2064,6 @@ SunAbraham(
 | `time` | str | Time period column |
 | `first_treat` | str | Column with first treatment period (0 for never-treated) |
 | `covariates` | list | Covariate column names |
-| `min_pre_periods` | int | Minimum pre-treatment periods to include |
-| `min_post_periods` | int | Minimum post-treatment periods to include |
 
 ### SunAbrahamResults
 

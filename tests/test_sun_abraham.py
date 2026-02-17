@@ -1442,6 +1442,15 @@ class TestSunAbrahamMethodology:
             f"SE differs: inf={results_inf.overall_se}, zero={results_zero.overall_se}"
         )
 
+    def test_removed_params_raise_typeerror(self):
+        """Removed min_pre_periods/min_post_periods raise TypeError."""
+        data = generate_staggered_data(n_units=30, n_periods=6, seed=42)
+        sa = SunAbraham(n_bootstrap=0)
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            sa.fit(data, "outcome", "unit", "time", "first_treat", min_pre_periods=2)
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            sa.fit(data, "outcome", "unit", "time", "first_treat", min_post_periods=2)
+
     def test_all_never_treated_inf_raises(self):
         """Test that all-never-treated data with np.inf encoding raises ValueError."""
         data = generate_staggered_data(n_units=100, n_periods=10, n_cohorts=3, seed=42)

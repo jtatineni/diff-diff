@@ -15,6 +15,7 @@ from scipy.sparse.linalg import factorized as sparse_factorized
 
 from diff_diff.linalg import solve_ols
 from diff_diff.staggered_bootstrap import _generate_bootstrap_weights_batch
+from diff_diff.two_stage import _SPARSE_DENSE_THRESHOLD
 from diff_diff.two_stage_results import TwoStageBootstrapResults
 
 __all__ = [
@@ -106,12 +107,19 @@ class TwoStageDiDBootstrapMixin:
         unique_clusters, cluster_indices = np.unique(cluster_ids, return_inverse=True)
         G = len(unique_clusters)
 
-        # Convert sparse to dense once (see _compute_gmm_variance for memory note).
-        # For panels with >100K FE columns, consider per-column .getcol() instead.
-        weighted_X10_dense = weighted_X10.toarray()
+        n_elements = weighted_X10.shape[0] * weighted_X10.shape[1]
         c_by_cluster = np.zeros((G, p))
-        for j_col in range(p):
-            np.add.at(c_by_cluster[:, j_col], cluster_indices, weighted_X10_dense[:, j_col])
+        if n_elements > _SPARSE_DENSE_THRESHOLD:
+            # Per-column path: limits peak memory for large FE matrices
+            weighted_X10_csc = weighted_X10.tocsc()
+            for j_col in range(p):
+                col_data = weighted_X10_csc.getcol(j_col).toarray().ravel()
+                np.add.at(c_by_cluster[:, j_col], cluster_indices, col_data)
+        else:
+            # Dense path: faster for moderate-size matrices
+            weighted_X10_dense = weighted_X10.toarray()
+            for j_col in range(p):
+                np.add.at(c_by_cluster[:, j_col], cluster_indices, weighted_X10_dense[:, j_col])
 
         weighted_X2 = X_2 * eps_2[:, None]
         s2_by_cluster = np.zeros((G, k))
