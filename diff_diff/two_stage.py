@@ -31,7 +31,7 @@ from scipy.sparse.linalg import factorized as sparse_factorized
 
 # Maximum number of elements before falling back to per-column sparse aggregation.
 # 10M float64 elements ≈ 80 MB peak allocation. Above this, per-column .getcol()
-# trades throughput for bounded memory.
+# trades throughput for bounded memory. Keep in sync with two_stage_bootstrap.py.
 _SPARSE_DENSE_THRESHOLD = 10_000_000
 
 from diff_diff.linalg import solve_ols

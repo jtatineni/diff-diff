@@ -1983,7 +1983,7 @@ TROP(
     max_iter=100,              # Max iterations for factor estimation
     tol=1e-6,                  # Convergence tolerance
     alpha=0.05,                # Significance level for CIs
-    n_bootstrap=200,           # Bootstrap replications
+    n_bootstrap=200,           # Bootstrap replications (minimum 2; TROP requires bootstrap for SEs)
     seed=None                  # Random seed
 )
 ```
@@ -2103,6 +2103,7 @@ ImputationDiD(
     alpha=0.05,                       # Significance level for CIs
     cluster=None,                     # Column for cluster-robust SEs
     n_bootstrap=0,                    # Bootstrap iterations (0 = analytical)
+    bootstrap_weights='rademacher',   # 'rademacher', 'mammen', or 'webb'
     seed=None,                        # Random seed
     rank_deficient_action='warn',     # 'warn', 'error', or 'silent'
     horizon_max=None,                 # Max event-study horizon
@@ -2157,6 +2158,7 @@ TwoStageDiD(
     alpha=0.05,                       # Significance level for CIs
     cluster=None,                     # Column for cluster-robust SEs (defaults to unit)
     n_bootstrap=0,                    # Bootstrap iterations (0 = analytical GMM SEs)
+    bootstrap_weights='rademacher',   # 'rademacher', 'mammen', or 'webb'
     seed=None,                        # Random seed
     rank_deficient_action='warn',     # 'warn', 'error', or 'silent'
     horizon_max=None,                 # Max event-study horizon

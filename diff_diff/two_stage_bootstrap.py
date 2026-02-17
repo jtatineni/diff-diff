@@ -15,7 +15,9 @@ from scipy.sparse.linalg import factorized as sparse_factorized
 
 from diff_diff.linalg import solve_ols
 from diff_diff.staggered_bootstrap import _generate_bootstrap_weights_batch
-from diff_diff.two_stage import _SPARSE_DENSE_THRESHOLD
+# Maximum number of elements before falling back to per-column sparse aggregation.
+# Keep in sync with two_stage.py.
+_SPARSE_DENSE_THRESHOLD = 10_000_000
 from diff_diff.two_stage_results import TwoStageBootstrapResults
 
 __all__ = [
