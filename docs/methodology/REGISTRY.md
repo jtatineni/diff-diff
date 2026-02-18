@@ -799,16 +799,31 @@ Doubly robust (DR): Combines outcome regression and IPW with efficiency correcti
 (OR bias correction term).
 
 *Standard errors (all methods):*
+
+Individual-level (default):
 ```
 SE = std(w₃·IF₃ + w₂·IF₂ - w₁·IF₁, ddof=1) / sqrt(n)
 ```
 where `w_j = n / n_j`, `n_j = |{subgroup=j}| + |{subgroup=4}|`, and `IF_j` is the
 per-observation influence function for pairwise DiD j (padded to full n with zeros).
 
+Cluster-robust (when `cluster` parameter is provided):
+```
+SE = sqrt( (G/(G-1)) * (1/n²) * Σ_c ψ_c² )
+```
+where `G` is the number of clusters, `ψ_c = Σ_{i∈c} IF_i` is the sum of the combined
+influence function within cluster `c`, and the `G/(G-1)` factor is the Liang-Zeger
+finite-sample adjustment.
+
+Note: IF-based SEs are inherently heteroskedasticity-robust; the `robust` parameter
+has no additional effect.
+
 *Edge cases:*
 - Propensity scores near 0/1: trimmed at `pscore_trim` (default 0.01)
 - Empty cells: raises ValueError with diagnostic message
-- Collinear covariates: automatic detection and warning
+- Low cell counts: warns when any cell has fewer than 10 observations
+- Collinear covariates: detected via pivoted QR in `solve_ols()`, action controlled by
+  `rank_deficient_action` ("warn", "error", "silent")
 - NaN inference for undefined statistics:
   - t_stat: Uses NaN (not 0.0) when SE is non-finite or zero
   - p_value and CI: Also NaN when t_stat is NaN
@@ -825,6 +840,7 @@ per-observation influence function for pairwise DiD j (padded to full n with zer
 - [x] Supports RA, IPW, and DR estimation methods
 - [x] Three-DiD decomposition: DDD = DiD_3 + DiD_2 - DiD_1 (matching R)
 - [x] Influence function SE: std(w3·IF_3 + w2·IF_2 - w1·IF_1) / sqrt(n)
+- [x] Cluster-robust SE via Liang-Zeger variance on influence function
 - [x] ATT and SE match R within <0.001% for all methods and DGP types
 
 ---

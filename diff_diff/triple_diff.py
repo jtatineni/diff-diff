@@ -9,19 +9,12 @@ when treatment requires satisfying two criteria:
 
 This module provides regression adjustment, inverse probability weighting,
 and doubly robust estimators that correctly handle covariate adjustment,
-unlike naive implementations.
+unlike naive implementations. Standard errors use the efficient influence
+function: SE = std(IF) / sqrt(n), which is inherently heteroskedasticity-
+robust. Cluster-robust SEs are available via the ``cluster`` parameter.
 
-Current Implementation (v1.3):
-    - 2-period DDD (pre/post binary time indicator)
-    - Regression adjustment, IPW, and doubly robust estimation
-    - Analytical standard errors with robust/cluster options
-    - Proper covariate handling
-
-Planned for v1.4 (see ROADMAP.md):
-    - Staggered adoption support (multiple treatment timing)
-    - Event study aggregation for dynamic treatment effects
-    - Multiplier bootstrap inference
-    - Integration with plot_event_study() visualization
+The DDD is computed via three pairwise DiD comparisons matching R's
+``triplediff::ddd()`` package (panel=FALSE mode).
 
 Reference:
     Ortiz-Villavicencio, M., & Sant'Anna, P. H. C. (2025).
@@ -29,6 +22,7 @@ Reference:
     arXiv:2505.09942.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,8 +30,11 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
+from diff_diff.linalg import solve_ols
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import safe_inference
+
+_MIN_CELL_SIZE = 10
 
 # =============================================================================
 # Results Classes
@@ -155,8 +152,8 @@ class TripleDifferenceResults:
             lines.append(f"{'Inference method:':<30} {self.inference_method:>15}")
             if self.n_bootstrap is not None:
                 lines.append(f"{'Bootstrap replications:':<30} {self.n_bootstrap:>15}")
-            if self.n_clusters is not None:
-                lines.append(f"{'Number of clusters:':<30} {self.n_clusters:>15}")
+        if self.n_clusters is not None:
+            lines.append(f"{'Number of clusters:':<30} {self.n_clusters:>15}")
 
         lines.extend([
             "",
@@ -348,9 +345,14 @@ class TripleDifference:
         - "reg": Regression adjustment (outcome regression).
         - "ipw": Inverse probability weighting.
     robust : bool, default=True
-        Whether to use heteroskedasticity-robust standard errors (HC1).
+        Whether to use heteroskedasticity-robust standard errors.
+        Note: influence function-based SEs are inherently robust to
+        heteroskedasticity, so this parameter has no effect. Retained
+        for API compatibility.
     cluster : str, optional
-        Column name for cluster-robust standard errors.
+        Column name for cluster-robust standard errors. When provided,
+        SEs are computed using the Liang-Zeger cluster-robust variance
+        estimator on the influence function.
     alpha : float, default=0.05
         Significance level for confidence intervals.
     pscore_trim : float, default=0.01
@@ -515,6 +517,9 @@ class TripleDifference:
         P = data[partition].values.astype(float)
         T = data[time].values.astype(float)
 
+        # Store cluster IDs for SE computation
+        self._cluster_ids = data[self.cluster].values if self.cluster is not None else None
+
         # Get covariates if specified
         X = None
         if covariates:
@@ -640,10 +645,19 @@ class TripleDifference:
         ]
 
         for mask, cell_name in cells:
-            if np.sum(mask) == 0:
+            n_cell = int(np.sum(mask))
+            if n_cell == 0:
                 raise ValueError(
                     f"No observations in cell: {cell_name}. "
                     "DDD requires observations in all 8 cells."
+                )
+            elif n_cell < _MIN_CELL_SIZE:
+                warnings.warn(
+                    f"Low observation count ({n_cell}) in cell: {cell_name}. "
+                    f"Estimates may be unreliable with fewer than "
+                    f"{_MIN_CELL_SIZE} observations per cell.",
+                    UserWarning,
+                    stacklevel=2,
                 )
 
     def _compute_cell_means(
@@ -882,7 +896,20 @@ class TripleDifference:
                      + w2 * did_results[2]["inf"]
                      - w1 * did_results[1]["inf"])
 
-        se = float(np.std(inf_func, ddof=1) / np.sqrt(n))
+        if self._cluster_ids is not None:
+            # Cluster-robust SE: sum IF within clusters, then Liang-Zeger variance
+            unique_clusters = np.unique(self._cluster_ids)
+            n_clusters_val = len(unique_clusters)
+            cluster_sums = np.array([
+                np.sum(inf_func[self._cluster_ids == c]) for c in unique_clusters
+            ])
+            # V = (G/(G-1)) * (1/n^2) * sum(psi_c^2)
+            se = float(np.sqrt(
+                (n_clusters_val / (n_clusters_val - 1))
+                * np.sum(cluster_sums**2) / n**2
+            ))
+        else:
+            se = float(np.std(inf_func, ddof=1) / np.sqrt(n))
 
         # Propensity score stats (for IPW/DR with covariates)
         if has_covariates and est_method != "reg" and all_pscores:
@@ -906,9 +933,13 @@ class TripleDifference:
                         X_fit = covX[cell_mask]
                         y_fit = y[cell_mask]
                         try:
-                            beta = np.linalg.lstsq(X_fit, y_fit, rcond=None)[0]
-                            mu_fitted[cell_mask] = X_fit @ beta
-                        except np.linalg.LinAlgError:
+                            beta_rs, _, _ = solve_ols(
+                                X_fit, y_fit,
+                                rank_deficient_action="silent",
+                            )
+                            beta_rs = np.where(np.isnan(beta_rs), 0.0, beta_rs)
+                            mu_fitted[cell_mask] = X_fit @ beta_rs
+                        except (np.linalg.LinAlgError, ValueError):
                             mu_fitted[cell_mask] = np.mean(y_fit)
             ss_res = np.sum((y - mu_fitted) ** 2)
             ss_tot = np.sum((y - np.mean(y)) ** 2)
@@ -934,18 +965,17 @@ class TripleDifference:
         X_fit = covX[fit_mask]
         y_fit = y[fit_mask]
 
-        # Check rank deficiency if requested
-        if self.rank_deficient_action == "error" and X_fit.shape[1] > 1:
-            rank = np.linalg.matrix_rank(X_fit)
-            if rank < X_fit.shape[1]:
-                raise ValueError(
-                    f"Rank-deficient design matrix in outcome regression: "
-                    f"rank {rank} < {X_fit.shape[1]} columns. "
-                    f"This may indicate multicollinearity in covariates."
-                )
-
         try:
-            beta = np.linalg.lstsq(X_fit, y_fit, rcond=None)[0]
+            beta, _, _ = solve_ols(
+                X_fit, y_fit,
+                rank_deficient_action=self.rank_deficient_action,
+            )
+            # Replace NaN coefficients (dropped columns) with 0 for prediction
+            beta = np.where(np.isnan(beta), 0.0, beta)
+        except ValueError:
+            if self.rank_deficient_action == "error":
+                raise
+            return np.full(n_total, np.mean(y_fit))
         except np.linalg.LinAlgError:
             return np.full(n_total, np.mean(y_fit))
 

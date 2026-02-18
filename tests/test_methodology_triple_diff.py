@@ -15,6 +15,7 @@ References:
 import json
 import os
 import subprocess
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -1088,3 +1089,144 @@ class TestParamsAndResults:
         assert results.n_treated_ineligible == 100
         assert results.n_control_eligible == 100
         assert results.n_control_ineligible == 100
+
+
+# =============================================================================
+# Phase 8: Parameter Functionality Tests
+# =============================================================================
+
+
+class TestParameterFunctionality:
+    """Verify that estimator parameters actually affect behavior."""
+
+    def test_rank_deficient_action_warn(self):
+        """rank_deficient_action='warn' warns on collinear covariates."""
+        data = generate_ddd_data(n_per_cell=50, seed=42, add_covariates=True)
+        # Add a perfectly collinear covariate
+        data["age_dup"] = data["age"]
+
+        ddd = TripleDifference(estimation_method="reg", rank_deficient_action="warn")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = ddd.fit(
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age", "age_dup"],
+            )
+        rank_warnings = [
+            x for x in w
+            if "rank" in str(x.message).lower()
+            or "collinear" in str(x.message).lower()
+            or "dependent" in str(x.message).lower()
+        ]
+        assert len(rank_warnings) > 0, (
+            "Expected rank deficiency warning for collinear covariates"
+        )
+        assert np.isfinite(result.att)
+
+    def test_rank_deficient_action_silent(self):
+        """rank_deficient_action='silent' handles collinear covariates without warning."""
+        data = generate_ddd_data(n_per_cell=50, seed=42, add_covariates=True)
+        data["age_dup"] = data["age"]
+
+        ddd = TripleDifference(
+            estimation_method="reg", rank_deficient_action="silent",
+        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = ddd.fit(
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age", "age_dup"],
+            )
+        rank_warnings = [
+            x for x in w
+            if "rank" in str(x.message).lower()
+            or "collinear" in str(x.message).lower()
+            or "dependent" in str(x.message).lower()
+        ]
+        assert len(rank_warnings) == 0, (
+            "Expected no rank deficiency warnings with action='silent'"
+        )
+        assert np.isfinite(result.att)
+
+    def test_cluster_se_functional(self):
+        """cluster parameter produces cluster-robust SEs."""
+        data = generate_ddd_data(n_per_cell=100, seed=42)
+        # Create meaningful clusters (~20 clusters of ~40 obs each)
+        data["cluster_id"] = data.index % 20
+
+        ddd_no_cluster = TripleDifference(estimation_method="dr")
+        result_no_cluster = ddd_no_cluster.fit(
+            data,
+            outcome="outcome",
+            group="group",
+            partition="partition",
+            time="time",
+        )
+
+        ddd_cluster = TripleDifference(estimation_method="dr", cluster="cluster_id")
+        result_cluster = ddd_cluster.fit(
+            data,
+            outcome="outcome",
+            group="group",
+            partition="partition",
+            time="time",
+        )
+
+        # ATT should be identical (clustering affects SE only)
+        assert result_cluster.att == result_no_cluster.att
+        # SE should differ (cluster-robust vs individual)
+        assert result_cluster.se != result_no_cluster.se
+        # n_clusters should be populated
+        assert result_cluster.n_clusters is not None
+        assert result_cluster.n_clusters == 20
+
+    def test_low_cell_count_warning(self):
+        """Small cells produce a warning."""
+        data = generate_ddd_data(n_per_cell=5, seed=42)
+        ddd = TripleDifference(estimation_method="reg")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = ddd.fit(
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+            )
+        low_count_warnings = [
+            x for x in w if "low observation" in str(x.message).lower()
+        ]
+        assert len(low_count_warnings) > 0, (
+            "Expected low observation count warning for n_per_cell=5"
+        )
+        assert np.isfinite(result.att)
+
+    def test_robust_param_is_noop(self):
+        """robust param has no effect on IF-based SEs."""
+        data = generate_ddd_data(n_per_cell=50, seed=42)
+
+        result_robust = TripleDifference(robust=True).fit(
+            data,
+            outcome="outcome",
+            group="group",
+            partition="partition",
+            time="time",
+        )
+        result_not_robust = TripleDifference(robust=False).fit(
+            data,
+            outcome="outcome",
+            group="group",
+            partition="partition",
+            time="time",
+        )
+
+        assert result_robust.att == result_not_robust.att
+        assert result_robust.se == result_not_robust.se
