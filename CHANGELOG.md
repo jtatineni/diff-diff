@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Module splits for large files: ImputationDiD, TwoStageDiD, and TROP each split into separate results and bootstrap submodules
 - Migrated remaining inline inference computations to `safe_inference()` utility
-- Replaced `np.dot()` calls with `@` operator across codebase
+- Replaced `@` operator with `np.dot()` at observation-dimension sites to avoid Apple M4 BLAS warnings
 - Updated TODO.md and ROADMAP.md for accuracy post-v2.4.0
 
 ### Fixed
