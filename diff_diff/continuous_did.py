@@ -78,6 +78,9 @@ class ContinuousDiD:
     >>> results.overall_att  # doctest: +SKIP
     """
 
+    _VALID_CONTROL_GROUPS = {"never_treated", "not_yet_treated"}
+    _VALID_BASE_PERIODS = {"varying", "universal"}
+
     def __init__(
         self,
         degree: int = 3,
@@ -103,6 +106,20 @@ class ContinuousDiD:
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
         self.rank_deficient_action = rank_deficient_action
+        self._validate_constrained_params()
+
+    def _validate_constrained_params(self) -> None:
+        """Validate control_group and base_period values."""
+        if self.control_group not in self._VALID_CONTROL_GROUPS:
+            raise ValueError(
+                f"Invalid control_group: '{self.control_group}'. "
+                f"Must be one of {self._VALID_CONTROL_GROUPS}."
+            )
+        if self.base_period not in self._VALID_BASE_PERIODS:
+            raise ValueError(
+                f"Invalid base_period: '{self.base_period}'. "
+                f"Must be one of {self._VALID_BASE_PERIODS}."
+            )
 
     def get_params(self) -> Dict[str, Any]:
         """Return estimator parameters as a dictionary."""
@@ -126,6 +143,7 @@ class ContinuousDiD:
             if not hasattr(self, key):
                 raise ValueError(f"Invalid parameter: {key}")
             setattr(self, key, value)
+        self._validate_constrained_params()
         return self
 
     # ------------------------------------------------------------------
@@ -206,6 +224,21 @@ class ContinuousDiD:
                 f"Dose must be strictly positive for treated units (D > 0)."
             )
 
+        # Detect discrete (integer-valued) dose among treated units
+        unit_doses = df.loc[df[first_treat] > 0].groupby(unit)[dose].first()
+        unique_pos_doses = unit_doses[unit_doses > 0].unique()
+        is_integer = len(unique_pos_doses) > 0 and np.allclose(
+            unique_pos_doses, np.round(unique_pos_doses)
+        )
+        if is_integer:
+            warnings.warn(
+                f"Dose appears discrete ({len(unique_pos_doses)} unique integer values). "
+                "B-spline smoothing may be inappropriate for discrete treatments. "
+                "Consider a saturated regression approach (not yet implemented).",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Force dose=0 for never-treated units with nonzero dose
         never_treated_mask = df[first_treat] == 0
         if (df.loc[never_treated_mask, dose] != 0).any():
@@ -273,46 +306,10 @@ class ContinuousDiD:
             if t >= g - self.anticipation
         }
 
-        # Compute cell weights: group-proportional (matching R's contdid convention).
-        # Each group g gets weight proportional to its number of treated units.
-        # Within each group, weight is divided equally among post-treatment cells.
-        group_n_treated = {}
-        group_n_post_cells = {}
-        for (g, t), r in post_gt.items():
-            if g not in group_n_treated:
-                group_n_treated[g] = float(r["n_treated"])
-                group_n_post_cells[g] = 0
-            group_n_post_cells[g] += 1
-
-        total_treated = sum(group_n_treated.values())
-        cell_weights = {}
-        if total_treated > 0:
-            for (g, t), r in post_gt.items():
-                pg = group_n_treated[g] / total_treated
-                cell_weights[(g, t)] = pg / group_n_post_cells[g]
-
         # Dose-response aggregation
         n_grid = len(dvals)
-        agg_att_d = np.zeros(n_grid)
-        agg_acrt_d = np.zeros(n_grid)
-        overall_att = 0.0
-        overall_acrt = 0.0
 
-        for gt, w in cell_weights.items():
-            r = post_gt[gt]
-            agg_att_d += w * r["att_d"]
-            agg_acrt_d += w * r["acrt_d"]
-            overall_att += w * r["att_glob"]
-            overall_acrt += w * r["acrt_glob"]
-
-        # Event study aggregation (binarized)
-        event_study_effects = None
-        if aggregate == "eventstudy":
-            event_study_effects = self._aggregate_event_study(
-                gt_results, treatment_groups
-            )
-
-        # 5. Bootstrap
+        # NaN-initialized SE/CI fields (used when post_gt is empty or as defaults)
         att_d_se = np.full(n_grid, np.nan)
         att_d_ci_lower = np.full(n_grid, np.nan)
         att_d_ci_upper = np.full(n_grid, np.nan)
@@ -328,65 +325,116 @@ class ContinuousDiD:
         overall_acrt_p = np.nan
         overall_acrt_ci = (np.nan, np.nan)
 
-        if self.n_bootstrap > 0:
-            boot_result = self._run_bootstrap(
-                precomp, gt_results, gt_bootstrap_info, post_gt, cell_weights,
-                knots, degree, dvals, overall_att, overall_acrt,
-                agg_att_d, agg_acrt_d,
-                event_study_effects,
+        # Event study aggregation (binarized) — runs on ALL (g,t) cells
+        event_study_effects = None
+        if aggregate == "eventstudy":
+            event_study_effects = self._aggregate_event_study(
+                gt_results, treatment_groups
             )
-            att_d_se = boot_result["att_d_se"]
-            att_d_ci_lower = boot_result["att_d_ci_lower"]
-            att_d_ci_upper = boot_result["att_d_ci_upper"]
-            acrt_d_se = boot_result["acrt_d_se"]
-            acrt_d_ci_lower = boot_result["acrt_d_ci_lower"]
-            acrt_d_ci_upper = boot_result["acrt_d_ci_upper"]
-            overall_att_se = boot_result["overall_att_se"]
-            overall_att_t, overall_att_p, overall_att_ci = safe_inference(
-                overall_att, overall_att_se, self.alpha
+
+        if len(post_gt) == 0:
+            warnings.warn(
+                "No post-treatment (g,t) cells available for aggregation. "
+                "This can occur when all treatments start after the last observed "
+                "period or all cells were skipped due to insufficient data.",
+                UserWarning,
+                stacklevel=2,
             )
-            overall_acrt_se = boot_result["overall_acrt_se"]
-            overall_acrt_t, overall_acrt_p, overall_acrt_ci = safe_inference(
-                overall_acrt, overall_acrt_se, self.alpha
-            )
-            if event_study_effects is not None:
-                for e, info in event_study_effects.items():
-                    if e in boot_result.get("es_se", {}):
-                        info["se"] = boot_result["es_se"][e]
-                        info["t_stat"], info["p_value"], info["conf_int"] = (
-                            safe_inference(info["effect"], info["se"], self.alpha)
-                        )
+            overall_att = np.nan
+            overall_acrt = np.nan
+            agg_att_d = np.full(n_grid, np.nan)
+            agg_acrt_d = np.full(n_grid, np.nan)
         else:
-            # Analytical SEs via influence functions
-            analytic = self._compute_analytical_se(
-                precomp, gt_results, gt_bootstrap_info, post_gt, cell_weights,
-                knots, degree, dvals, agg_att_d, agg_acrt_d,
-            )
-            att_d_se = analytic["att_d_se"]
-            acrt_d_se = analytic["acrt_d_se"]
-            overall_att_se = analytic["overall_att_se"]
-            overall_acrt_se = analytic["overall_acrt_se"]
+            # Compute cell weights: group-proportional (matching R's contdid convention).
+            # Each group g gets weight proportional to its number of treated units.
+            # Within each group, weight is divided equally among post-treatment cells.
+            group_n_treated = {}
+            group_n_post_cells = {}
+            for (g, t), r in post_gt.items():
+                if g not in group_n_treated:
+                    group_n_treated[g] = float(r["n_treated"])
+                    group_n_post_cells[g] = 0
+                group_n_post_cells[g] += 1
 
-            overall_att_t, overall_att_p, overall_att_ci = safe_inference(
-                overall_att, overall_att_se, self.alpha
-            )
-            overall_acrt_t, overall_acrt_p, overall_acrt_ci = safe_inference(
-                overall_acrt, overall_acrt_se, self.alpha
-            )
+            total_treated = sum(group_n_treated.values())
+            cell_weights = {}
+            if total_treated > 0:
+                for (g, t), r in post_gt.items():
+                    pg = group_n_treated[g] / total_treated
+                    cell_weights[(g, t)] = pg / group_n_post_cells[g]
 
-            # Per-grid-point inference for dose-response
-            for idx in range(n_grid):
-                _, _, ci = safe_inference(
-                    agg_att_d[idx], att_d_se[idx], self.alpha
+            agg_att_d = np.zeros(n_grid)
+            agg_acrt_d = np.zeros(n_grid)
+            overall_att = 0.0
+            overall_acrt = 0.0
+
+            for gt, w in cell_weights.items():
+                r = post_gt[gt]
+                agg_att_d += w * r["att_d"]
+                agg_acrt_d += w * r["acrt_d"]
+                overall_att += w * r["att_glob"]
+                overall_acrt += w * r["acrt_glob"]
+
+            # 5. Bootstrap / Analytical SE
+            if self.n_bootstrap > 0:
+                boot_result = self._run_bootstrap(
+                    precomp, gt_results, gt_bootstrap_info, post_gt, cell_weights,
+                    knots, degree, dvals, overall_att, overall_acrt,
+                    agg_att_d, agg_acrt_d,
+                    event_study_effects,
                 )
-                att_d_ci_lower[idx] = ci[0]
-                att_d_ci_upper[idx] = ci[1]
-
-                _, _, ci = safe_inference(
-                    agg_acrt_d[idx], acrt_d_se[idx], self.alpha
+                att_d_se = boot_result["att_d_se"]
+                att_d_ci_lower = boot_result["att_d_ci_lower"]
+                att_d_ci_upper = boot_result["att_d_ci_upper"]
+                acrt_d_se = boot_result["acrt_d_se"]
+                acrt_d_ci_lower = boot_result["acrt_d_ci_lower"]
+                acrt_d_ci_upper = boot_result["acrt_d_ci_upper"]
+                overall_att_se = boot_result["overall_att_se"]
+                overall_att_t, overall_att_p, overall_att_ci = safe_inference(
+                    overall_att, overall_att_se, self.alpha
                 )
-                acrt_d_ci_lower[idx] = ci[0]
-                acrt_d_ci_upper[idx] = ci[1]
+                overall_acrt_se = boot_result["overall_acrt_se"]
+                overall_acrt_t, overall_acrt_p, overall_acrt_ci = safe_inference(
+                    overall_acrt, overall_acrt_se, self.alpha
+                )
+                if event_study_effects is not None:
+                    for e, info in event_study_effects.items():
+                        if e in boot_result.get("es_se", {}):
+                            info["se"] = boot_result["es_se"][e]
+                            info["t_stat"], info["p_value"], info["conf_int"] = (
+                                safe_inference(info["effect"], info["se"], self.alpha)
+                            )
+            else:
+                # Analytical SEs via influence functions
+                analytic = self._compute_analytical_se(
+                    precomp, gt_results, gt_bootstrap_info, post_gt, cell_weights,
+                    knots, degree, dvals, agg_att_d, agg_acrt_d,
+                )
+                att_d_se = analytic["att_d_se"]
+                acrt_d_se = analytic["acrt_d_se"]
+                overall_att_se = analytic["overall_att_se"]
+                overall_acrt_se = analytic["overall_acrt_se"]
+
+                overall_att_t, overall_att_p, overall_att_ci = safe_inference(
+                    overall_att, overall_att_se, self.alpha
+                )
+                overall_acrt_t, overall_acrt_p, overall_acrt_ci = safe_inference(
+                    overall_acrt, overall_acrt_se, self.alpha
+                )
+
+                # Per-grid-point inference for dose-response
+                for idx in range(n_grid):
+                    _, _, ci = safe_inference(
+                        agg_att_d[idx], att_d_se[idx], self.alpha
+                    )
+                    att_d_ci_lower[idx] = ci[0]
+                    att_d_ci_upper[idx] = ci[1]
+
+                    _, _, ci = safe_inference(
+                        agg_acrt_d[idx], acrt_d_se[idx], self.alpha
+                    )
+                    acrt_d_ci_lower[idx] = ci[0]
+                    acrt_d_ci_upper[idx] = ci[1]
 
         # 6. Assemble results
         dose_response_att = DoseResponseCurve(
@@ -780,12 +828,13 @@ class ContinuousDiD:
                 beta_pert = -bread @ psi_bar * ee_control[k] / n_c
                 if_acrt_glob[idx] += w * float(dpsi_bar @ beta_pert)
 
-        # SE = sqrt(mean(IF_i^2))
-        overall_att_se = float(np.sqrt(np.mean(if_att_glob**2)))
-        overall_acrt_se = float(np.sqrt(np.mean(if_acrt_glob**2)))
+        # SE = sqrt(sum(IF_i^2)), matching CallawaySantAnna's convention
+        # (per-unit IFs already contain 1/n_t, 1/n_c scaling)
+        overall_att_se = float(np.sqrt(np.sum(if_att_glob**2)))
+        overall_acrt_se = float(np.sqrt(np.sum(if_acrt_glob**2)))
 
-        att_d_se = np.sqrt(np.mean(if_att_d**2, axis=0))
-        acrt_d_se = np.sqrt(np.mean(if_acrt_d**2, axis=0))
+        att_d_se = np.sqrt(np.sum(if_att_d**2, axis=0))
+        acrt_d_se = np.sqrt(np.sum(if_acrt_d**2, axis=0))
 
         return {
             "overall_att_se": overall_att_se,

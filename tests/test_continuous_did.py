@@ -582,3 +582,109 @@ class TestEdgeCases:
                 f"Pre-treatment ATT(g={g},t={t}) = {att_glob:.4f} is too large; "
                 f"cohort may be contaminating its own control group"
             )
+
+
+class TestAnalyticalSEParity:
+    """Test analytical SE vs bootstrap SE agreement."""
+
+    def test_analytical_se_matches_bootstrap(self, ci_params):
+        """Analytical SEs should be within ~50% of bootstrap SEs."""
+        n_boot = ci_params.bootstrap(999, min_n=199)
+        data = generate_continuous_did_data(
+            n_units=200, n_periods=3, seed=42, noise_sd=1.0,
+        )
+        est_boot = ContinuousDiD(n_bootstrap=n_boot, seed=42)
+        results_boot = est_boot.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose"
+        )
+        est_analytic = ContinuousDiD(n_bootstrap=0)
+        results_analytic = est_analytic.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose"
+        )
+        threshold = 0.50 if n_boot < 100 else 0.30
+        ratio = results_analytic.overall_att_se / results_boot.overall_att_se
+        assert (1 - threshold) < ratio < (1 + threshold) / (1 - threshold), (
+            f"Analytical/bootstrap SE ratio = {ratio:.3f}, "
+            f"expected within [{1 - threshold:.2f}, {(1 + threshold) / (1 - threshold):.2f}]"
+        )
+
+
+class TestDiscreteDoseWarning:
+    """Test discrete dose detection warning."""
+
+    def test_discrete_dose_warning(self):
+        """Integer-valued doses should trigger a discrete dose warning."""
+        data = generate_continuous_did_data(
+            n_units=100, n_periods=3, seed=42,
+        )
+        data["dose"] = data["dose"].round().astype(float)
+        data.loc[data["first_treat"] == 0, "dose"] = 0.0
+        est = ContinuousDiD()
+        with pytest.warns(UserWarning, match="[Dd]iscrete"):
+            est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+
+
+class TestAnticipationEventStudy:
+    """Test event study with anticipation > 0."""
+
+    def test_anticipation_event_study(self):
+        """Event study with anticipation > 0 should include anticipation periods."""
+        data = generate_continuous_did_data(
+            n_units=100, n_periods=5, cohort_periods=[3], seed=42,
+        )
+        est = ContinuousDiD(anticipation=1, n_bootstrap=0)
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose",
+            aggregate="eventstudy",
+        )
+        assert results.event_study_effects is not None
+        # With anticipation=1 and g=3, post-treatment starts at t=2 (g - anticipation).
+        # Relative times e = t - g, so t=2 → e=-1 (the anticipation period).
+        rel_times = sorted(results.event_study_effects.keys())
+        assert -1 in rel_times, (
+            f"Anticipation period e=-1 missing from event study; got {rel_times}"
+        )
+        assert np.isfinite(results.event_study_effects[-1]["effect"])
+
+
+class TestEmptyPostTreatment:
+    """Test guard for empty post-treatment cells."""
+
+    def test_no_post_treatment_cells_warns(self):
+        """When no post-treatment cells exist, should warn and return NaN."""
+        data = generate_continuous_did_data(
+            n_units=50, n_periods=3, cohort_periods=[5], seed=42,
+        )
+        est = ContinuousDiD()
+        with pytest.warns(UserWarning, match="[Nn]o post-treatment"):
+            results = est.fit(
+                data, "outcome", "unit", "period", "first_treat", "dose"
+            )
+        assert np.isnan(results.overall_att)
+        assert np.isnan(results.overall_acrt)
+
+
+class TestParameterValidation:
+    """Test parameter validation for constrained values."""
+
+    def test_invalid_control_group_raises(self):
+        """Invalid control_group should raise ValueError."""
+        with pytest.raises(ValueError, match="control_group"):
+            ContinuousDiD(control_group="invalid")
+
+    def test_invalid_base_period_raises(self):
+        """Invalid base_period should raise ValueError."""
+        with pytest.raises(ValueError, match="base_period"):
+            ContinuousDiD(base_period="invalid")
+
+    def test_set_params_invalid_control_group_raises(self):
+        """set_params with invalid control_group should raise ValueError."""
+        est = ContinuousDiD()
+        with pytest.raises(ValueError, match="control_group"):
+            est.set_params(control_group="NEVER_TREATED")
+
+    def test_set_params_invalid_base_period_raises(self):
+        """set_params with invalid base_period should raise ValueError."""
+        est = ContinuousDiD()
+        with pytest.raises(ValueError, match="base_period"):
+            est.set_params(base_period="VARYING")
