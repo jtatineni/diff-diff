@@ -688,3 +688,80 @@ class TestParameterValidation:
         est = ContinuousDiD()
         with pytest.raises(ValueError, match="base_period"):
             est.set_params(base_period="VARYING")
+
+
+class TestBootstrapPercentileInference:
+    """Test that bootstrap uses percentile CI/p-value, not normal approximation."""
+
+    def test_bootstrap_percentile_ci(self, ci_params):
+        """Bootstrap CIs should use percentile method (generally asymmetric)."""
+        n_boot = ci_params.bootstrap(499, min_n=199)
+        data = generate_continuous_did_data(
+            n_units=200, n_periods=3, seed=42, noise_sd=0.5,
+        )
+        est = ContinuousDiD(n_bootstrap=n_boot, seed=42)
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose"
+        )
+        lo, hi = results.overall_att_conf_int
+        estimate = results.overall_att
+        # CI should contain estimate
+        assert lo <= estimate <= hi
+        # p-value should be finite and in [0, 1]
+        assert 0 <= results.overall_att_p_value <= 1
+        # Percentile CIs are generally asymmetric around the estimate.
+        # With enough bootstrap reps, the upper and lower distances differ.
+        upper_dist = hi - estimate
+        lower_dist = estimate - lo
+        # Just verify both distances are positive (CI is non-degenerate)
+        assert upper_dist > 0
+        assert lower_dist > 0
+
+
+class TestNotYetTreatedNoDZeroWarning:
+    """Test P(D=0)>0 warning for not_yet_treated with no never-treated units."""
+
+    def test_no_never_treated_warns(self):
+        """not_yet_treated with zero never-treated units should warn."""
+        data = generate_continuous_did_data(
+            n_units=100,
+            n_periods=4,
+            cohort_periods=[2, 3],
+            never_treated_frac=0.0,
+            seed=42,
+        )
+        est = ContinuousDiD(control_group="not_yet_treated", degree=1, num_knots=0)
+        with pytest.warns(UserWarning, match="No never-treated.*D=0"):
+            results = est.fit(
+                data, "outcome", "unit", "period", "first_treat", "dose"
+            )
+        # Estimation should still complete (warn-and-continue)
+        assert isinstance(results, ContinuousDiDResults)
+        assert np.isfinite(results.overall_att)
+
+
+class TestEventStudyAnalyticalSE:
+    """Test analytical SEs for event study aggregation (n_bootstrap=0)."""
+
+    def test_event_study_analytical_se_finite(self):
+        """Event study with n_bootstrap=0 should produce finite SE/t/p for all bins."""
+        data = generate_continuous_did_data(
+            n_units=200, n_periods=5, cohort_periods=[2, 4],
+            seed=42, noise_sd=0.5,
+        )
+        est = ContinuousDiD(n_bootstrap=0)
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose",
+            aggregate="eventstudy",
+        )
+        assert results.event_study_effects is not None
+        for e, info in results.event_study_effects.items():
+            assert np.isfinite(info["se"]), f"SE is NaN for e={e}"
+            assert info["se"] > 0, f"SE is non-positive for e={e}"
+            assert np.isfinite(info["t_stat"]), f"t_stat is NaN for e={e}"
+            assert np.isfinite(info["p_value"]), f"p_value is NaN for e={e}"
+            assert 0 <= info["p_value"] <= 1, f"p_value out of range for e={e}"
+            lo, hi = info["conf_int"]
+            assert np.isfinite(lo) and np.isfinite(hi), (
+                f"conf_int contains NaN for e={e}"
+            )

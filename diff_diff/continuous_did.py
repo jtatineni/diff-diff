@@ -266,6 +266,16 @@ class ContinuousDiD:
                 "or add never-treated units."
             )
 
+        if self.control_group == "not_yet_treated" and n_control == 0:
+            warnings.warn(
+                "No never-treated (D=0) units found. With control_group='not_yet_treated', "
+                "not-yet-treated units (D>0) serve as controls, but dose-response curve "
+                "identification requires P(D=0) > 0 (see Remark 3.1 in Callaway et al.). "
+                "Estimates may be unreliable.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # 2. Precompute structures
         precomp = self._precompute_structures(
             df, outcome, unit, time, first_treat, dose, time_periods
@@ -390,20 +400,26 @@ class ContinuousDiD:
                 acrt_d_ci_lower = boot_result["acrt_d_ci_lower"]
                 acrt_d_ci_upper = boot_result["acrt_d_ci_upper"]
                 overall_att_se = boot_result["overall_att_se"]
-                overall_att_t, overall_att_p, overall_att_ci = safe_inference(
+                overall_att_t = safe_inference(
                     overall_att, overall_att_se, self.alpha
-                )
+                )[0]
+                overall_att_p = boot_result["overall_att_p"]
+                overall_att_ci = boot_result["overall_att_ci"]
                 overall_acrt_se = boot_result["overall_acrt_se"]
-                overall_acrt_t, overall_acrt_p, overall_acrt_ci = safe_inference(
+                overall_acrt_t = safe_inference(
                     overall_acrt, overall_acrt_se, self.alpha
-                )
+                )[0]
+                overall_acrt_p = boot_result["overall_acrt_p"]
+                overall_acrt_ci = boot_result["overall_acrt_ci"]
                 if event_study_effects is not None:
                     for e, info in event_study_effects.items():
                         if e in boot_result.get("es_se", {}):
                             info["se"] = boot_result["es_se"][e]
-                            info["t_stat"], info["p_value"], info["conf_int"] = (
-                                safe_inference(info["effect"], info["se"], self.alpha)
-                            )
+                            info["t_stat"] = safe_inference(
+                                info["effect"], info["se"], self.alpha
+                            )[0]
+                            info["p_value"] = boot_result["es_p"][e]
+                            info["conf_int"] = boot_result["es_ci"][e]
             else:
                 # Analytical SEs via influence functions
                 analytic = self._compute_analytical_se(
@@ -435,6 +451,64 @@ class ContinuousDiD:
                     )
                     acrt_d_ci_lower[idx] = ci[0]
                     acrt_d_ci_upper[idx] = ci[1]
+
+                # Event study analytical SEs
+                if event_study_effects is not None:
+                    n_units = precomp["n_units"]
+                    for e_val, info_e in event_study_effects.items():
+                        # Collect (g,t) cells for this event-time bin
+                        e_gts = [gt for gt in gt_results if gt[1] - gt[0] == e_val]
+                        if not e_gts:
+                            continue
+                        # n_treated-proportional weights within this bin
+                        ns = np.array(
+                            [gt_results[gt]["n_treated"] for gt in e_gts],
+                            dtype=float,
+                        )
+                        total_n = ns.sum()
+                        if total_n == 0:
+                            continue
+                        ws = ns / total_n
+
+                        # Build per-unit IF for this event-time bin
+                        if_es = np.zeros(n_units)
+                        for idx_cell, gt in enumerate(e_gts):
+                            b_info = gt_bootstrap_info.get(gt, {})
+                            if not b_info:
+                                continue
+                            w = ws[idx_cell]
+                            treated_idx = b_info["treated_indices"]
+                            control_idx = b_info["control_indices"]
+                            n_t = b_info["n_treated"]
+                            n_c = b_info["n_control"]
+                            n_total_gt = n_t + n_c
+                            p_1 = n_t / n_total_gt
+                            p_0 = n_c / n_total_gt
+                            att_glob_gt = b_info["att_glob"]
+                            mu_0 = b_info["mu_0"]
+                            delta_y_treated = b_info["delta_y_treated"]
+                            ee_control = b_info["ee_control"]
+
+                            for k, uid in enumerate(treated_idx):
+                                if_es[uid] += (
+                                    w
+                                    * (delta_y_treated[k] - att_glob_gt - mu_0)
+                                    / p_1
+                                    / n_total_gt
+                                )
+                            for k, uid in enumerate(control_idx):
+                                if_es[uid] -= (
+                                    w * ee_control[k] / p_0 / n_total_gt
+                                )
+
+                        es_se = float(np.sqrt(np.sum(if_es**2)))
+                        t_stat, p_val, ci_es = safe_inference(
+                            info_e["effect"], es_se, self.alpha
+                        )
+                        info_e["se"] = es_se
+                        info_e["t_stat"] = t_stat
+                        info_e["p_value"] = p_val
+                        info_e["conf_int"] = ci_es
 
         # 6. Assemble results
         dose_response_att = DoseResponseCurve(
@@ -1010,25 +1084,35 @@ class ContinuousDiD:
         result["acrt_d_ci_upper"] = acrt_d_ci_upper
 
         # Overall
-        se, _, _ = compute_effect_bootstrap_stats(
+        se, ci, p = compute_effect_bootstrap_stats(
             original_att, boot_att_glob, alpha=self.alpha, context="overall ATT_glob",
         )
         result["overall_att_se"] = se
+        result["overall_att_ci"] = ci
+        result["overall_att_p"] = p
 
-        se, _, _ = compute_effect_bootstrap_stats(
+        se, ci, p = compute_effect_bootstrap_stats(
             original_acrt, boot_acrt_glob, alpha=self.alpha, context="overall ACRT_glob",
         )
         result["overall_acrt_se"] = se
+        result["overall_acrt_ci"] = ci
+        result["overall_acrt_p"] = p
 
         # Event study SEs
         if event_study_effects is not None:
             es_se = {}
+            es_ci = {}
+            es_p = {}
             for e in es_keys:
-                se_e, _, _ = compute_effect_bootstrap_stats(
+                se_e, ci_e, p_e = compute_effect_bootstrap_stats(
                     event_study_effects[e]["effect"], boot_es[e],
                     alpha=self.alpha, context=f"event study e={e}",
                 )
                 es_se[e] = se_e
+                es_ci[e] = ci_e
+                es_p[e] = p_e
             result["es_se"] = es_se
+            result["es_ci"] = es_ci
+            result["es_p"] = es_p
 
         return result
