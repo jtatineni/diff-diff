@@ -343,6 +343,8 @@ class ContinuousDiD:
         overall_acrt_t = np.nan
         overall_acrt_p = np.nan
         overall_acrt_ci = (np.nan, np.nan)
+        att_d_p = None
+        acrt_d_p = None
 
         # Event study aggregation (binarized) — runs on ALL (g,t) cells
         event_study_effects = None
@@ -408,6 +410,8 @@ class ContinuousDiD:
                 acrt_d_se = boot_result["acrt_d_se"]
                 acrt_d_ci_lower = boot_result["acrt_d_ci_lower"]
                 acrt_d_ci_upper = boot_result["acrt_d_ci_upper"]
+                att_d_p = boot_result["att_d_p"]
+                acrt_d_p = boot_result["acrt_d_p"]
                 overall_att_se = boot_result["overall_att_se"]
                 overall_att_t = safe_inference(
                     overall_att, overall_att_se, self.alpha
@@ -527,6 +531,8 @@ class ContinuousDiD:
             conf_int_lower=att_d_ci_lower,
             conf_int_upper=att_d_ci_upper,
             target="att",
+            p_value=att_d_p,
+            n_bootstrap=self.n_bootstrap,
         )
         dose_response_acrt = DoseResponseCurve(
             dose_grid=dvals,
@@ -535,6 +541,8 @@ class ContinuousDiD:
             conf_int_lower=acrt_d_ci_lower,
             conf_int_upper=acrt_d_ci_upper,
             target="acrt",
+            p_value=acrt_d_p,
+            n_bootstrap=self.n_bootstrap,
         )
 
         # Strip bootstrap internals from gt_results
@@ -1075,22 +1083,27 @@ class ContinuousDiD:
         acrt_d_ci_lower = np.full(n_grid, np.nan)
         acrt_d_ci_upper = np.full(n_grid, np.nan)
 
+        att_d_p = np.full(n_grid, np.nan)
+        acrt_d_p = np.full(n_grid, np.nan)
+
         for idx in range(n_grid):
-            se, ci, _ = compute_effect_bootstrap_stats(
+            se, ci, p = compute_effect_bootstrap_stats(
                 original_att_d[idx], boot_att_d[:, idx],
                 alpha=self.alpha, context=f"ATT(d) at grid point {idx}",
             )
             att_d_se[idx] = se
             att_d_ci_lower[idx] = ci[0]
             att_d_ci_upper[idx] = ci[1]
+            att_d_p[idx] = p
 
-            se, ci, _ = compute_effect_bootstrap_stats(
+            se, ci, p = compute_effect_bootstrap_stats(
                 original_acrt_d[idx], boot_acrt_d[:, idx],
                 alpha=self.alpha, context=f"ACRT(d) at grid point {idx}",
             )
             acrt_d_se[idx] = se
             acrt_d_ci_lower[idx] = ci[0]
             acrt_d_ci_upper[idx] = ci[1]
+            acrt_d_p[idx] = p
 
         result["att_d_se"] = att_d_se
         result["att_d_ci_lower"] = att_d_ci_lower
@@ -1098,6 +1111,8 @@ class ContinuousDiD:
         result["acrt_d_se"] = acrt_d_se
         result["acrt_d_ci_lower"] = acrt_d_ci_lower
         result["acrt_d_ci_upper"] = acrt_d_ci_upper
+        result["att_d_p"] = att_d_p
+        result["acrt_d_p"] = acrt_d_p
 
         # Overall
         se, ci, p = compute_effect_bootstrap_stats(

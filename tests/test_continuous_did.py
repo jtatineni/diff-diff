@@ -447,6 +447,67 @@ class TestEventStudyAggregation:
         assert "relative_period" in df.columns
         assert "att_glob" in df.columns
 
+    def test_event_study_not_yet_treated(self):
+        """Event study with control_group='not_yet_treated' and analytic SE."""
+        data = generate_continuous_did_data(
+            n_units=200, n_periods=5, cohort_periods=[2, 4],
+            seed=42, noise_sd=0.5,
+        )
+        est = ContinuousDiD(control_group="not_yet_treated", n_bootstrap=0)
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose",
+            aggregate="eventstudy",
+        )
+        assert results.event_study_effects is not None
+        rel_periods = sorted(results.event_study_effects.keys())
+        assert min(rel_periods) < 0  # Pre-treatment
+        assert max(rel_periods) >= 0  # Post-treatment
+        for e, info in results.event_study_effects.items():
+            assert np.isfinite(info["effect"]), f"effect is NaN for e={e}"
+            assert np.isfinite(info["se"]), f"SE is NaN for e={e}"
+
+    def test_event_study_universal_base_period(self):
+        """Event study with base_period='universal' and analytic SE."""
+        data = generate_continuous_did_data(
+            n_units=200, n_periods=5, cohort_periods=[2, 4],
+            seed=42, noise_sd=0.5,
+        )
+        est = ContinuousDiD(base_period="universal", n_bootstrap=0)
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose",
+            aggregate="eventstudy",
+        )
+        assert results.event_study_effects is not None
+        rel_periods = sorted(results.event_study_effects.keys())
+        assert min(rel_periods) < 0  # Pre-treatment
+        assert max(rel_periods) >= 0  # Post-treatment
+        for e, info in results.event_study_effects.items():
+            assert np.isfinite(info["effect"]), f"effect is NaN for e={e}"
+            assert np.isfinite(info["se"]), f"SE is NaN for e={e}"
+
+    def test_event_study_not_yet_treated_bootstrap(self, ci_params):
+        """Event study with not_yet_treated control group and bootstrap SE."""
+        n_boot = ci_params.bootstrap(99)
+        data = generate_continuous_did_data(
+            n_units=200, n_periods=5, cohort_periods=[2, 4],
+            seed=42, noise_sd=0.5,
+        )
+        est = ContinuousDiD(
+            control_group="not_yet_treated", n_bootstrap=n_boot, seed=42,
+        )
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose",
+            aggregate="eventstudy",
+        )
+        assert results.event_study_effects is not None
+        rel_periods = sorted(results.event_study_effects.keys())
+        assert min(rel_periods) < 0  # Pre-treatment
+        assert max(rel_periods) >= 0  # Post-treatment
+        for e, info in results.event_study_effects.items():
+            if e >= 0:  # Post-treatment: SE and p-value should be finite
+                assert np.isfinite(info["se"]), f"SE is NaN for post e={e}"
+                assert np.isfinite(info["p_value"]), f"p_value is NaN for post e={e}"
+
 
 class TestBootstrap:
     """Test bootstrap inference."""
@@ -512,6 +573,30 @@ class TestBootstrap:
         )
         assert 0 <= results.overall_att_p_value <= 1
         assert 0 <= results.overall_acrt_p_value <= 1
+
+    def test_bootstrap_dose_response_p_values(self, ci_params):
+        """Bootstrap dose-response should use bootstrap p-values, not normal approx."""
+        n_boot = ci_params.bootstrap(99)
+        data = generate_continuous_did_data(
+            n_units=100, n_periods=3, seed=42, noise_sd=0.5,
+        )
+        est = ContinuousDiD(n_bootstrap=n_boot, seed=42)
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose"
+        )
+        for curve in [results.dose_response_att, results.dose_response_acrt]:
+            df = curve.to_dataframe()
+            # Bootstrap mode: t-stat is undefined
+            assert all(np.isnan(df["t_stat"])), (
+                f"t_stat should be NaN in bootstrap mode for {curve.target}"
+            )
+            # Bootstrap p-values should be present and valid
+            assert all(np.isfinite(df["p_value"])), (
+                f"p_value should be finite in bootstrap mode for {curve.target}"
+            )
+            assert all((df["p_value"] >= 0) & (df["p_value"] <= 1)), (
+                f"p_value out of [0,1] range for {curve.target}"
+            )
 
 
 class TestAnalyticalSE:

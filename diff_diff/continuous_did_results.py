@@ -43,17 +43,26 @@ class DoseResponseCurve:
     conf_int_lower: np.ndarray
     conf_int_upper: np.ndarray
     target: str
+    p_value: Optional[np.ndarray] = None
+    n_bootstrap: int = 0
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert to DataFrame with dose, effect, se, CI, t_stat, p_value."""
-        from diff_diff.utils import safe_inference
+        n = len(self.effects)
+        if self.n_bootstrap > 0 and self.p_value is not None:
+            # Bootstrap inference: use stored p-values, t-stat is undefined
+            t_stat = np.full(n, np.nan)
+            p_value = self.p_value
+        else:
+            # Analytic inference: compute t-stat and p-value from normal approx
+            from diff_diff.utils import safe_inference
 
-        t_stat = np.full(len(self.effects), np.nan)
-        p_value = np.full(len(self.effects), np.nan)
-        for i in range(len(self.effects)):
-            t_i, p_i, _ = safe_inference(self.effects[i], self.se[i])
-            t_stat[i] = t_i
-            p_value[i] = p_i
+            t_stat = np.full(n, np.nan)
+            p_value = np.full(n, np.nan)
+            for i in range(n):
+                t_i, p_i, _ = safe_inference(self.effects[i], self.se[i])
+                t_stat[i] = t_i
+                p_value[i] = p_i
         return pd.DataFrame(
             {
                 "dose": self.dose_grid,
