@@ -349,9 +349,7 @@ class ContinuousDiD:
         # Event study aggregation (binarized) — runs on ALL (g,t) cells
         event_study_effects = None
         if aggregate == "eventstudy":
-            event_study_effects = self._aggregate_event_study(
-                gt_results, treatment_groups
-            )
+            event_study_effects = self._aggregate_event_study(gt_results)
 
         if len(post_gt) == 0:
             warnings.warn(
@@ -794,6 +792,7 @@ class ContinuousDiD:
             "ee_control": ee_control,
             "psi_bar": psi_bar,
             "beta_hat": beta_hat,
+            "beta_pred": beta_pred,
             "treated_indices": treated_indices,
             "control_indices": control_indices,
             "n_treated": n_treated,
@@ -822,7 +821,6 @@ class ContinuousDiD:
     def _aggregate_event_study(
         self,
         gt_results: Dict[Tuple, Dict],
-        treatment_groups: List[Any],
     ) -> Dict[int, Dict[str, Any]]:
         """Aggregate binarized ATT_glob by relative period."""
         effects_by_e: Dict[int, List[Tuple[float, float]]] = {}
@@ -1016,7 +1014,7 @@ class ContinuousDiD:
             ee_treated = info["ee_treated"]
             ee_control = info["ee_control"]
             psi_bar = info["psi_bar"]
-            beta_hat = info["beta_hat"]
+            beta_pred = info["beta_pred"]
             Psi_eval = info["Psi_eval"]
             dPsi_eval = info["dPsi_eval"]
             dPsi_treated = info["dPsi_treated"]
@@ -1033,7 +1031,7 @@ class ContinuousDiD:
                 psi_bar_outer = psi_bar[np.newaxis, :]
 
                 delta_beta = (treated_sum - control_sum[:, np.newaxis] * psi_bar_outer) @ bread.T
-                beta_b = beta_hat[np.newaxis, :] + delta_beta
+                beta_b = beta_pred[np.newaxis, :] + delta_beta
 
                 att_d_b = beta_b @ Psi_eval.T
                 acrt_d_b = beta_b @ dPsi_eval.T

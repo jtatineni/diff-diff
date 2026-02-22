@@ -191,6 +191,20 @@ class TestEdgeCasesMethodology:
             atol=1e-10,
         )
 
+        # Verify bootstrap path also produces finite ATT SE (not NaN) for
+        # rank-deficient cells — regression test for P1 bootstrap fix.
+        # ACRT SE is correctly NaN: zero dose variation → zero-variance
+        # bootstrap distribution → degenerate SE → NaN by design.
+        est_boot = ContinuousDiD(
+            degree=1, num_knots=0, n_bootstrap=199,
+            rank_deficient_action="silent", seed=42,
+        )
+        with pytest.warns(UserWarning, match="[Ii]dentical"):
+            results_boot = est_boot.fit(
+                data, "outcome", "unit", "period", "first_treat", "dose"
+            )
+        assert np.all(np.isfinite(results_boot.dose_response_att.se))
+
     def test_single_treated_unit(self):
         """Single treated unit: not enough for OLS → no valid cells → ValueError."""
         rows = []
