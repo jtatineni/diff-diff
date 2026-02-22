@@ -745,12 +745,18 @@ class ContinuousDiD:
             rank_deficient_action=self.rank_deficient_action,
         )
 
+        # For prediction: zero out NaN (dropped rank-deficient columns).
+        # solve_ols sets dropped-column coefficients to NaN (R convention);
+        # zeroing them produces correct predictions: ATT(d) = intercept
+        # (constant), ACRT(d) = 0 (derivative of intercept is 0).
+        beta_pred = np.where(np.isnan(beta_hat), 0.0, beta_hat)
+
         # Evaluate ATT(d) and ACRT(d) at dvals
         Psi_eval = bspline_design_matrix(dvals, knots, degree, include_intercept=True)
         dPsi_eval = bspline_derivative_design_matrix(dvals, knots, degree, include_intercept=True)
 
-        att_d = Psi_eval @ beta_hat
-        acrt_d = dPsi_eval @ beta_hat
+        att_d = Psi_eval @ beta_pred
+        acrt_d = dPsi_eval @ beta_pred
 
         # Summary parameters
         att_glob = float(np.mean(delta_y_treated) - mu_0)
@@ -759,7 +765,7 @@ class ContinuousDiD:
         dPsi_treated = bspline_derivative_design_matrix(
             treated_doses, knots, degree, include_intercept=True
         )
-        acrt_glob = float(np.mean(dPsi_treated @ beta_hat))
+        acrt_glob = float(np.mean(dPsi_treated @ beta_pred))
 
         # Store bootstrap info for influence function computation
         # bread = (Psi'Psi / n_treated)^{-1}

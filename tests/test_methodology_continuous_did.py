@@ -176,6 +176,20 @@ class TestEdgeCasesMethodology:
             results = est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
         # ATT_glob should be 5.0
         np.testing.assert_allclose(results.overall_att, 5.0, atol=1e-10)
+        # Dose-response: ATT(d) should be constant = overall_att everywhere.
+        # With all-same dose, only the intercept is identified, which equals
+        # mean(delta_tilde_Y) = att_glob — same quantity by both paths.
+        np.testing.assert_allclose(
+            results.dose_response_att.effects,
+            results.overall_att,
+            atol=1e-10,
+        )
+        # ACRT(d) should be zero everywhere (no dose variation → zero derivative)
+        np.testing.assert_allclose(
+            results.dose_response_acrt.effects,
+            0.0,
+            atol=1e-10,
+        )
 
     def test_single_treated_unit(self):
         """Single treated unit: not enough for OLS → no valid cells → ValueError."""
