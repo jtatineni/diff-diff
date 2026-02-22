@@ -7,9 +7,19 @@ This module implements the methodology from Callaway, Goodman-Bacon & Sant'Anna 
 "Difference-in-Differences with a Continuous Treatment" (NBER WP 32117), which:
 
 1. **Estimates dose-response curves**: ATT(d) and ACRT(d) as functions of dose
-2. **Computes summary parameters**: Overall ATT and ACRT aggregated across doses
+2. **Computes summary parameters**: Overall ATT (binarized) and ACRT aggregated across doses
 3. **Uses B-spline smoothing**: Flexible nonparametric estimation of dose-response functions
 4. **Supports multiplier bootstrap**: Valid inference with proper standard errors and CIs
+
+.. note::
+
+   **Identification assumptions.** The dose-response curves ATT(d) and ACRT(d),
+   as well as ATT\ :sup:`glob` and ACRT\ :sup:`glob`, require the **Strong Parallel
+   Trends (SPT)** assumption — that there is no selection into dose groups based on
+   treatment effects. Under the weaker standard Parallel Trends (PT) assumption,
+   only the binarized ATT\ :sup:`loc` (``overall_att``) is identified; it equals
+   ATT\ :sup:`glob` only when SPT holds. See Callaway, Goodman-Bacon & Sant'Anna
+   (2024), Assumptions 1–2.
 
 **When to use Continuous DiD:**
 
@@ -17,6 +27,11 @@ This module implements the methodology from Callaway, Goodman-Bacon & Sant'Anna 
 - You want to estimate how effects change with treatment dose
 - Staggered adoption with heterogeneous dose levels
 - You need the full dose-response curve, not just a single average effect
+
+**Data requirements:**
+
+- An **untreated group** (D = 0) must be present in the data
+- A **balanced panel** is required (all units observed in all time periods)
 
 **Reference:** Callaway, B., Goodman-Bacon, A., & Sant'Anna, P. H. C. (2024).
 Difference-in-Differences with a Continuous Treatment. *NBER Working Paper* 32117.
@@ -127,7 +142,7 @@ Comparison with CallawaySantAnna
      - Continuous dose / intensity
      - Binary (treated / not treated)
    * - Target parameter
-     - ATT(d), ACRT(d), ATT_glob, ACRT_glob
+     - ATT\ :sup:`loc` (PT); ATT(d), ACRT(d), ATT\ :sup:`glob`, ACRT\ :sup:`glob` (SPT)
      - ATT(g,t), aggregated ATT
    * - Smoothing
      - B-spline basis for dose-response

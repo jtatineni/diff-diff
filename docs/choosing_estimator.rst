@@ -65,8 +65,8 @@ Quick Reference
      - ATT with unit/time weights
    * - ``ContinuousDiD``
      - Continuous dose / treatment intensity
-     - Parallel trends across dose levels
-     - Dose-response curves ATT(d), ACRT(d)
+     - Strong Parallel Trends (SPT) for dose-response; PT for binarized ATT
+     - ATT\ :sup:`loc` (PT); ATT(d), ACRT(d) (SPT)
 
 Detailed Guidance
 -----------------
@@ -191,6 +191,12 @@ Use :class:`~diff_diff.ContinuousDiD` when:
 - You want to estimate how effects change with treatment dose
 - You need the full dose-response curve, not just a single average effect
 - Staggered adoption where units receive different treatment levels
+
+.. note::
+
+   Dose-response curves ATT(d) and ACRT(d) require **Strong Parallel Trends (SPT)**.
+   Under standard PT only the binarized ATT\ :sup:`loc` is identified.
+   Data must include an untreated group (D = 0) and a balanced panel.
 
 .. code-block:: python
 
