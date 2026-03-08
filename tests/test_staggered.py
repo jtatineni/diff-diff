@@ -885,6 +885,46 @@ class TestCallawaySantAnnaCovariates:
         assert results.overall_att is not None
         assert results.overall_se > 0
 
+    def test_dr_covariates_not_yet_treated(self):
+        """Regression test: DR + covariates with not_yet_treated control group.
+
+        Ensures cache keys correctly include cohort g for not_yet_treated,
+        preventing stale Cholesky/pscore reuse across groups.
+        """
+        data = generate_staggered_data_with_covariates(seed=42, n_units=200)
+
+        for method in ['dr', 'reg']:
+            cs = CallawaySantAnna(
+                estimation_method=method,
+                control_group='not_yet_treated',
+            )
+            results = cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'x2'],
+            )
+
+            assert np.isfinite(results.overall_att), (
+                f"{method}/not_yet_treated: ATT should be finite"
+            )
+            assert results.overall_se > 0, (
+                f"{method}/not_yet_treated: SE should be positive"
+            )
+            assert len(results.group_time_effects) > 0, (
+                f"{method}/not_yet_treated: should have group-time effects"
+            )
+            # All effects should be finite
+            for (g, t), eff in results.group_time_effects.items():
+                assert np.isfinite(eff['effect']), (
+                    f"{method}/not_yet_treated: effect for ({g},{t}) should be finite"
+                )
+                assert np.isfinite(eff['se']), (
+                    f"{method}/not_yet_treated: SE for ({g},{t}) should be finite"
+                )
+
     def test_rank_deficient_action_error_raises(self):
         """Test that rank_deficient_action='error' raises ValueError on collinear data."""
         data = generate_staggered_data_with_covariates(seed=42)

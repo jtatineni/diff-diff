@@ -571,7 +571,7 @@ class CallawaySantAnna(
             if is_balanced and self.control_group == "never_treated":
                 cho_key = base_period_val
             else:
-                cho_key = (base_period_val, t)
+                cho_key = (g, base_period_val, t)
 
         # Estimation method
         if self.estimation_method == "reg":
@@ -780,6 +780,7 @@ class CallawaySantAnna(
         atts = []
         ses = []
         task_keys = []
+        n_dropped_cells = 0
 
         # Collect all valid (g, t) tasks with their base periods
         tasks_by_group = {}  # control_key -> list of (g, t, base_period_val, base_col, post_col)
@@ -808,11 +809,11 @@ class CallawaySantAnna(
                 # Determine control regression grouping key.
                 # For balanced panels with never_treated control, X_control depends
                 # only on base_period_val (control mask is time-invariant).
-                # Otherwise, the valid_mask or control_mask can change per (base, t).
+                # For not_yet_treated, the control mask excludes cohort g, so include g.
                 if is_balanced and self.control_group == "never_treated":
                     control_key = base_period_val
                 else:
-                    control_key = (base_period_val, t)
+                    control_key = (g, base_period_val, t)
 
                 tasks_by_group.setdefault(control_key, []).append(
                     (g, t, base_period_val, period_to_col[base_period_val], period_to_col[t])
@@ -954,6 +955,7 @@ class CallawaySantAnna(
                             beta = result[0]
 
                     if beta is None or np.any(~np.isfinite(beta)):
+                        n_dropped_cells += 1
                         continue
 
                     # Predict counterfactual for treated
@@ -962,6 +964,7 @@ class CallawaySantAnna(
                         predicted_control = X_treated_w_intercept @ beta
                     treated_residuals = treated_change - predicted_control
                     if np.any(~np.isfinite(predicted_control)):
+                        n_dropped_cells += 1
                         continue
                     att = float(np.mean(treated_residuals))
 
@@ -969,6 +972,7 @@ class CallawaySantAnna(
                     with np.errstate(all='ignore'):
                         residuals = control_change - pair_X_ctrl @ beta
                     if np.any(~np.isfinite(residuals)):
+                        n_dropped_cells += 1
                         continue
 
                     var_t = float(np.var(treated_residuals, ddof=1)) if n_t > 1 else 0.0
@@ -999,6 +1003,14 @@ class CallawaySantAnna(
                 atts.append(att)
                 ses.append(se)
                 task_keys.append((g, t))
+
+        if n_dropped_cells > 0:
+            warnings.warn(
+                f"{n_dropped_cells} group-time cell(s) dropped due to non-finite "
+                "regression results (near-singular covariates).",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Batch inference
         if task_keys:

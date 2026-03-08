@@ -49,12 +49,13 @@ def generate_data(n_units=10_000, seed=42, n_covariates=0):
     return df
 
 
-def run_estimator(df, estimation_method="reg", covariates=None):
+def run_estimator(df, estimation_method="reg", covariates=None, control_group="never_treated"):
     """Run estimator and extract key results."""
     cs = CallawaySantAnna(
         n_bootstrap=199,
         seed=42,
         estimation_method=estimation_method,
+        control_group=control_group,
     )
     results = cs.fit(
         df,
@@ -102,6 +103,8 @@ SCENARIOS = [
     {"name": "reg_10cov", "method": "reg", "n_cov": 10},
     {"name": "dr_2cov", "method": "dr", "n_cov": 2},
     {"name": "ipw_2cov", "method": "ipw", "n_cov": 2},
+    {"name": "dr_2cov_nyt", "method": "dr", "n_cov": 2, "control_group": "not_yet_treated"},
+    {"name": "reg_2cov_nyt", "method": "reg", "n_cov": 2, "control_group": "not_yet_treated"},
 ]
 
 
@@ -113,8 +116,9 @@ def save_baseline(path="benchmarks/speed_review/baseline_results.json"):
         print(f"Running scenario: {name} ...")
         df = generate_data(n_covariates=scenario["n_cov"])
         covariates = [f"x{i}" for i in range(1, scenario["n_cov"] + 1)] if scenario["n_cov"] > 0 else None
+        control_group = scenario.get("control_group", "never_treated")
         results = run_estimator(df, estimation_method=scenario["method"],
-                                covariates=covariates)
+                                covariates=covariates, control_group=control_group)
         all_results[name] = results
         print(f"  Overall ATT: {results['overall_att']:.10f}")
         print(f"  N group-time effects: {len(results['group_time_effects'])}")
@@ -140,12 +144,13 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
         baseline = all_baseline[name]
         df = generate_data(n_covariates=scenario["n_cov"])
         covariates = [f"x{i}" for i in range(1, scenario["n_cov"] + 1)] if scenario["n_cov"] > 0 else None
+        control_group = scenario.get("control_group", "never_treated")
 
         # Use relaxed tolerance for covariate scenarios (Cholesky vs lstsq)
         scenario_tol = 1e-10 if scenario["n_cov"] > 0 else tol
 
         current = run_estimator(df, estimation_method=scenario["method"],
-                                covariates=covariates)
+                                covariates=covariates, control_group=control_group)
 
         failures = []
 
