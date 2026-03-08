@@ -1365,6 +1365,86 @@ class TestEventStudySEWithWIF:
                 assert np.isfinite(eff_data['se']), \
                     f"Single-group SE for e={e} should be finite"
 
+    def test_unbalanced_panel_bootstrap_uses_global_n(self, ci_params):
+        """
+        Bootstrap SEs should use global N (all panel units), not just units
+        appearing in influence functions. When some units have NaN outcomes
+        in all periods, they appear in precomputed['all_units'] but are
+        excluded from IFs, creating n_global > n_IF_units.
+
+        Regression test for the bug where _run_multiplier_bootstrap() built
+        the unit set from influence_func_info (local), causing pg = n_g / n_local
+        to overestimate group shares and mis-scale WIF.
+        """
+        n_boot = ci_params.bootstrap(999)
+        # Generate balanced staggered data
+        data = generate_staggered_data(
+            n_units=100,
+            n_periods=8,
+            cohort_periods=[3, 5],
+            treatment_effect=2.0,
+            seed=42
+        )
+
+        # Add extra never-treated units with NaN outcomes in all periods.
+        # These units will be in the panel (and precomputed['all_units'])
+        # but excluded from all IFs because NaN fails the validity check.
+        n_nan_units = 10
+        max_unit = data['unit'].max()
+        periods = sorted(data['period'].unique())
+        nan_rows = []
+        for i in range(1, n_nan_units + 1):
+            uid = max_unit + i
+            for p in periods:
+                nan_rows.append({
+                    'unit': uid,
+                    'period': p,
+                    'first_treat': 0,  # never-treated
+                    'outcome': np.nan,
+                })
+        data_unbalanced = pd.concat(
+            [data, pd.DataFrame(nan_rows)], ignore_index=True
+        )
+
+        n_global = data_unbalanced['unit'].nunique()
+        n_valid = data['unit'].nunique()  # units that actually appear in IFs
+        assert n_global > n_valid, "Test setup: global N should exceed IF unit count"
+
+        # Analytical SEs (already fixed to use global N)
+        cs_analytical = CallawaySantAnna(n_bootstrap=0)
+        results_a = cs_analytical.fit(
+            data_unbalanced, outcome='outcome', unit='unit',
+            time='period', first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Bootstrap SEs (the fix under test)
+        cs_boot = CallawaySantAnna(n_bootstrap=n_boot, seed=42, cband=False)
+        results_b = cs_boot.fit(
+            data_unbalanced, outcome='outcome', unit='unit',
+            time='period', first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        assert results_a.event_study_effects is not None
+        assert results_b.event_study_effects is not None
+
+        threshold = 0.40 if n_boot < 100 else 0.25
+        n_compared = 0
+        for e in results_a.event_study_effects:
+            se_a = results_a.event_study_effects[e]['se']
+            if e not in results_b.event_study_effects:
+                continue
+            se_b = results_b.event_study_effects[e]['se']
+            if np.isfinite(se_a) and se_a > 0 and np.isfinite(se_b) and se_b > 0:
+                rel_diff = abs(se_a - se_b) / se_a
+                assert rel_diff < threshold, \
+                    f"e={e}: analytical SE={se_a:.4f} vs bootstrap SE={se_b:.4f} " \
+                    f"(diff={rel_diff*100:.1f}% > {threshold*100}%)"
+                n_compared += 1
+
+        assert n_compared > 0, "No event times had finite SEs for comparison"
+
 
 class TestSimultaneousConfidenceBands:
     """Tests for simultaneous confidence bands (cband)."""

@@ -166,14 +166,23 @@ class CallawaySantAnnaBootstrapMixin:
 
         rng = np.random.default_rng(self.seed)
 
-        # Collect all unique units across all (g,t) combinations
-        all_units = set()
-        for (g, t), info in influence_func_info.items():
-            all_units.update(info['treated_units'])
-            all_units.update(info['control_units'])
-        all_units = sorted(all_units)
-        n_units = len(all_units)
-        unit_to_idx = {u: i for i, u in enumerate(all_units)}
+        # Use global unit set for correct pg = n_g / N_total scaling.
+        # Without this, pg is overestimated in unbalanced panels where some
+        # units don't appear in any influence function.
+        if precomputed is not None:
+            all_units = precomputed['all_units']
+            n_units = len(all_units)
+            unit_to_idx = precomputed['unit_to_idx']
+        else:
+            # Fallback: collect units from influence functions
+            all_units_set = set()
+            for (g, t), info in influence_func_info.items():
+                all_units_set.update(info['treated_units'])
+                all_units_set.update(info['control_units'])
+            all_units = sorted(all_units_set)
+            # Use global N from dataframe when available
+            n_units = df[unit].nunique() if (df is not None and unit is not None) else len(all_units)
+            unit_to_idx = {u: i for i, u in enumerate(all_units)}
 
         # Get list of (g,t) pairs
         gt_pairs = list(group_time_effects.keys())
