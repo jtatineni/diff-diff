@@ -419,7 +419,16 @@ class CallawaySantAnnaBootstrapMixin:
                         axis=0,
                     )
                 finite_mask = np.isfinite(sup_t_dist)
-                if np.sum(finite_mask) > 0:
+                n_valid = int(np.sum(finite_mask))
+                n_total = len(sup_t_dist)
+                if n_valid < n_total * 0.5:
+                    warnings.warn(
+                        f"Too few valid sup-t bootstrap samples ({n_valid}/{n_total}). "
+                        "Returning None for cband critical value.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                elif n_valid > 0:
                     cband_crit_value = float(
                         np.quantile(sup_t_dist[finite_mask], 1 - self.alpha)
                     )

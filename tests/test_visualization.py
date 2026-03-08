@@ -175,6 +175,32 @@ class TestPlotEventStudy:
         ax = plot_event_study(df, reference_period=0, show=False)
         assert ax is not None
 
+    def test_plot_from_dataframe_with_nan_cband(self):
+        """Test that NaN cband columns fall back to pointwise CIs."""
+        pytest.importorskip("matplotlib")
+        from diff_diff.visualization import _extract_plot_data
+
+        df = pd.DataFrame(
+            {
+                "period": [-2, -1, 0, 1, 2],
+                "effect": [0.1, 0.05, 0.0, 0.5, 0.6],
+                "se": [0.1, 0.1, 0.0, 0.15, 0.15],
+                "cband_lower": [np.nan] * 5,
+                "cband_upper": [np.nan] * 5,
+            }
+        )
+
+        # All-NaN cband columns should not produce overrides
+        result = _extract_plot_data(df, periods=None, pre_periods=None, post_periods=None, reference_period=0)
+        ci_lo = result[7]
+        ci_hi = result[8]
+        assert ci_lo is None, "ci_lower_override should be None when cband is all-NaN"
+        assert ci_hi is None, "ci_upper_override should be None when cband is all-NaN"
+
+        # Plot should still work (falls back to pointwise CIs)
+        ax = plot_event_study(df, reference_period=0, show=False)
+        assert ax is not None
+
     def test_plot_from_dict(self):
         """Test plotting from dictionaries."""
         pytest.importorskip("matplotlib")

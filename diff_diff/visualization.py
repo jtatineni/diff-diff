@@ -398,12 +398,15 @@ def _extract_plot_data(
         if periods is None:
             periods = list(results["period"])
 
-        # Extract simultaneous confidence bands if present
+        # Extract simultaneous confidence bands if present and finite
         ci_lower_override = None
         ci_upper_override = None
         if "cband_lower" in results.columns and "cband_upper" in results.columns:
-            ci_lower_override = dict(zip(results["period"], results["cband_lower"]))
-            ci_upper_override = dict(zip(results["period"], results["cband_upper"]))
+            finite_mask = results["cband_lower"].notna() & results["cband_upper"].notna()
+            if finite_mask.any():
+                finite_rows = results[finite_mask]
+                ci_lower_override = dict(zip(finite_rows["period"], finite_rows["cband_lower"]))
+                ci_upper_override = dict(zip(finite_rows["period"], finite_rows["cband_upper"]))
 
         # DataFrame input: reference_period was already set by caller, never inferred here
         return effects, se, periods, pre_periods, post_periods, reference_period, False, ci_lower_override, ci_upper_override

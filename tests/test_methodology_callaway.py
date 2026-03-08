@@ -11,6 +11,7 @@ with multiple time periods. Journal of Econometrics, 225(2), 200-230.
 """
 
 import subprocess
+import unittest.mock
 import warnings
 from typing import Any, Dict, Tuple
 
@@ -1542,6 +1543,40 @@ class TestSimultaneousConfidenceBands:
             time='period', first_treat='first_treat',
             aggregate='event_study'
         )
+
+        assert results.cband_crit_value is None
+
+    def test_cband_validity_threshold(self):
+        """When >50% of sup-t bootstrap draws are non-finite, cband_crit_value is None."""
+        data = generate_staggered_data(
+            n_units=100,
+            n_periods=6,
+            cohort_periods=[3],
+            treatment_effect=2.0,
+            seed=42,
+        )
+
+        cs = CallawaySantAnna(n_bootstrap=50, seed=42, cband=True)
+
+        # Patch np.max to return mostly-NaN sup-t distribution
+        original_max = np.max
+
+        def mock_max(a, axis=None):
+            result = original_max(a, axis=axis)
+            if axis == 0 and hasattr(result, '__len__') and len(result) > 10:
+                # Make >50% of sup-t draws NaN
+                result = result.copy()
+                n_nan = int(len(result) * 0.6)
+                result[:n_nan] = np.nan
+            return result
+
+        with unittest.mock.patch('diff_diff.staggered_bootstrap.np.max', side_effect=mock_max):
+            with pytest.warns(RuntimeWarning, match="Too few valid sup-t"):
+                results = cs.fit(
+                    data, outcome='outcome', unit='unit',
+                    time='period', first_treat='first_treat',
+                    aggregate='event_study',
+                )
 
         assert results.cband_crit_value is None
 
