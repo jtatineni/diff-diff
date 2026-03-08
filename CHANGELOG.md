@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - 2026-03-08
+
+### Added
+- Short aliases for all estimators (e.g., `DID`, `TWFE`, `MPID`, `CSAN`, `SDID`)
+
+### Changed
+- Update roadmap for v2.6.0: reflect completed work and refresh priorities
+- Add ContinuousDiD to ReadTheDocs API reference and choosing guide
+- Add SPT identification caveat and data requirements per review
+- Add time-invariant dose requirement to data requirements
+
+### Fixed
+- Fix alias docs wording: clarify TROP has no alias
+- Fix ContinuousDiD SE method: influence function, not delta method
+- Fix methodology doc: influence functions, not delta method for ContinuousDiD SEs
+- Fix dollar sign escaping in continuous DiD tutorial
+- Fix continuous DiD tutorial formatting: escape dollar signs and split chart cell
+- Fix methodology claims and slide numbering per PR review
+
 ## [2.6.0] - 2026-02-22
 
 ### Added
@@ -833,6 +852,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.6.1]: https://github.com/igerber/diff-diff/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/igerber/diff-diff/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/igerber/diff-diff/compare/v2.4.3...v2.5.0
 [2.4.3]: https://github.com/igerber/diff-diff/compare/v2.4.2...v2.4.3

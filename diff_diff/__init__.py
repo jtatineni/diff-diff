@@ -173,7 +173,7 @@ DDD = TripleDifference
 Stacked = StackedDiD
 Bacon = BaconDecomposition
 
-__version__ = "2.6.0"
+__version__ = "2.6.1"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
