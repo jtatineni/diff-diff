@@ -46,9 +46,13 @@ When implementing or modifying code that affects statistical methodology (estima
    - [ ] For edge cases: either match reference OR document deviation
 
 3. **When deviating from reference implementations**:
-   - [ ] Add a **Note** in the Methodology Registry explaining the deviation
+   - [ ] Add entry in `docs/methodology/REGISTRY.md` using a reviewer-recognized label:
+         `**Note**:`, `**Deviation from R**:`, or `**Note (deviation from R):**`
+         (see CLAUDE.md "Documenting Deviations" for full format reference)
    - [ ] Include rationale (e.g., "defensive enhancement", "R errors here")
    - [ ] Ensure the deviation is an improvement, not a bug
+   - [ ] If deferring P2/P3 work: add row to `TODO.md` table under "Tech Debt from Code
+         Reviews" with columns `Issue | Location | PR | Priority`
 
 4. **Testing methodology-aligned behavior**:
    - [ ] Test that edge cases produce documented behavior (NaN, warning, etc.)
