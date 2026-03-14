@@ -91,6 +91,29 @@ pytest tests/test_rust_backend.py -v
    Standalone estimators must be updated individually.
 8. **Dependencies**: numpy, pandas, and scipy ONLY. No statsmodels.
 
+## Documenting Deviations (AI Review Compatibility)
+
+The AI PR reviewer recognizes deviations as documented (and downgrades them to P3) ONLY
+when they use specific label patterns in `docs/methodology/REGISTRY.md`. Using different
+wording will cause a P1 finding ("undocumented methodology deviation").
+
+**Recognized REGISTRY.md labels** — use one of these in the relevant estimator section:
+
+| Label | When to use | Example |
+|-------|------------|---------|
+| `- **Note:** <text>` | Defensive enhancements, implementation choices | `- **Note:** Defensive enhancement matching CallawaySantAnna NaN convention` |
+| `- **Deviation from R:** <text>` | Intentional differences from R packages | `- **Deviation from R:** R's fixest uses t-distribution at all levels` |
+| `**Note (deviation from R):** <text>` | Combined form, inline within edge case bullets | See SyntheticDiD section in REGISTRY.md |
+
+**TODO.md format** — for deferring P2/P3 items only (P0/P1 cannot be deferred):
+
+Add a row to the table in `TODO.md` under "Tech Debt from Code Reviews" in the appropriate
+category (`Methodology/Correctness`, `Performance`, or `Testing/Docs`):
+
+| Issue | Location | PR | Priority |
+|-------|----------|----|----------|
+| Description of deferred item | `file.py` | #NNN | Medium/Low |
+
 ## Testing Conventions
 
 - **`ci_params` fixture** (session-scoped in `conftest.py`): Use `ci_params.bootstrap(n)` and

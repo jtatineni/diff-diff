@@ -107,6 +107,20 @@ git diff HEAD -- <changed-py-files> | grep "^+.*def " | head -10
 
 For each changed function, flag: "Verify docstring Parameters section matches updated signature for: `<function_name>`"
 
+#### 2.5 Methodology Documentation Check
+
+If any methodology files changed, check whether `docs/methodology/REGISTRY.md` was also
+modified in the changed file set (from Section 1).
+
+If methodology files changed but REGISTRY.md was NOT modified, flag:
+"Methodology files changed but `docs/methodology/REGISTRY.md` was not updated. If your
+changes deviate from reference implementations, document them using a reviewer-recognized
+label (`**Note:**`, `**Deviation from R:**`, or `**Note (deviation from R):**`) —
+undocumented deviations are flagged as P1 by the AI reviewer and cannot be mitigated
+by TODO.md."
+
+This is a WARNING, not a blocker — not every methodology change involves a deviation.
+
 ### 3. Display Context-Specific Checklist
 
 Based on what changed, display the appropriate checklist items:
@@ -134,6 +148,11 @@ Based on your changes to: <list of changed files>
 - [ ] Control group composition verified for new code paths
 - [ ] "Not-yet-treated" excludes the treatment cohort itself
 - [ ] Parameter interactions tested with all aggregation methods
+
+### Methodology Deviation Documentation
+- [ ] If deviating from reference implementation: added a reviewer-recognized label
+      (`**Note:**`, `**Deviation from R:**`, or `**Note (deviation from R):**`) in REGISTRY.md
+- [ ] No undocumented methodology deviations (AI reviewer flags these as P1)
 ```
 
 #### If Documentation Files Changed
@@ -141,7 +160,6 @@ Based on your changes to: <list of changed files>
 ### Documentation Sync
 - [ ] Docstrings updated for changed function signatures
 - [ ] README updated if user-facing behavior changes
-- [ ] REGISTRY.md updated if methodology edge cases change
 ```
 
 #### If This Appears to Be a Bug Fix
