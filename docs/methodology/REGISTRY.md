@@ -1255,10 +1255,16 @@ Optimization (Equation 2):
 ```
 (α̂, β̂, L̂) = argmin_{α,β,L} Σ_j Σ_s θ_s^{i,t} ω_j^{i,t} (1-W_js)(Y_js - α_j - β_s - L_js)² + λ_nn ||L||_*
 ```
-Solved via alternating minimization with soft-thresholding of singular values for L:
+Solved via alternating minimization. For α, β (or μ, α, β, τ in joint): weighted least
+squares (closed form). For L: proximal gradient with step size η = 1/(2·max(W)):
 ```
-L̂ = U × soft_threshold(Σ, λ_nn) × V'
+Gradient step: G = L + (W/max(W)) ⊙ (R - L)
+Proximal step: L = U × soft_threshold(Σ, η·λ_nn) × V'  (SVD of G = UΣV')
 ```
+where R is the residual after removing fixed effects (and τ·D in joint mode).
+Both the twostep and global solvers use FISTA/Nesterov acceleration for the
+inner L update (O(1/k²) convergence rate, up to 20 inner iterations per
+outer alternating step).
 
 Per-observation weights (Equation 3):
 ```
@@ -1344,43 +1350,59 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 - [x] D matrix semantics documented (absorbing state, not event indicator)
 - [x] Unbalanced panels supported (missing observations don't trigger false violations)
 
-### TROP Joint Optimization Method
+### TROP Global Estimation Method
 
-**Method**: `method="joint"` in TROP estimator
+**Method**: `method="global"` in TROP estimator (`method="joint"` is a deprecated alias)
 
-**Approach**: Joint weighted least squares with optional nuclear norm penalty.
-Estimates fixed effects, factor matrix, and scalar treatment effect simultaneously.
+**Approach**: Computationally efficient adaptation using the (1-W) masking
+principle from Eq. 2. Fits a single global model on control data, then
+extracts treatment effects as post-hoc residuals. For the paper's full
+per-treated-cell estimator (Algorithm 2), use `method='twostep'`.
 
-**Objective function** (Equation J1):
+**Objective function** (Equation G1):
 ```
-min_{μ, α, β, L, τ}  Σ_{i,t} δ_{it} × (Y_{it} - μ - α_i - β_t - L_{it} - W_{it}×τ)² + λ_nn×||L||_*
+min_{μ, α, β, L}  Σ_{i,t} (1-W_{it}) × δ_{it} × (Y_{it} - μ - α_i - β_t - L_{it})² + λ_nn×||L||_*
 ```
 
 where:
+- (1-W_{it}) masks out treated observations — model is fit on control data only
 - δ_{it} = δ_time(t) × δ_unit(i) are observation weights (product of time and unit weights)
 - μ is the intercept
 - α_i are unit fixed effects
 - β_t are time fixed effects
 - L_{it} is the low-rank factor component
-- τ is a **single scalar** (homogeneous treatment effect assumption)
-- W_{it} is the treatment indicator
+
+**Post-hoc treatment effect extraction**:
+```
+τ̂_{it} = Y_{it} - μ̂ - α̂_i - β̂_t - L̂_{it}    for all (i,t) where W_{it} = 1
+ATT = mean(τ̂_{it})  over all treated observations
+```
+
+Treatment effects are **heterogeneous** per-observation values. ATT is their mean.
 
 **Weight computation** (differs from twostep):
 - Time weights: δ_time(t) = exp(-λ_time × |t - center|) where center = T - treated_periods/2
 - Unit weights: δ_unit(i) = exp(-λ_unit × RMSE(i, treated_avg))
   where RMSE is computed over pre-treatment periods comparing to average treated trajectory
+- (1-W) masking applied after outer product: δ_{it} = 0 for all treated cells
 
 **Implementation approach** (without CVXPY):
 
 1. **Without low-rank (λ_nn = ∞)**: Standard weighted least squares
-   - Build design matrix with unit/time dummies + treatment indicator
-   - Solve via iterative coordinate descent for (μ, α, β, τ)
+   - Build design matrix with unit/time dummies (no treatment indicator)
+   - Solve via np.linalg.lstsq for (μ, α, β) using (1-W)-masked weights
 
 2. **With low-rank (finite λ_nn)**: Alternating minimization
    - Alternate between:
-     - Fix L, solve weighted LS for (μ, α, β, τ)
-     - Fix (μ, α, β, τ), soft-threshold SVD for L (proximal step)
-   - Continue until convergence
+     - Fix L, solve weighted LS for (μ, α, β)
+     - Fix (μ, α, β), proximal gradient for L:
+       - Lipschitz constant of ∇f is L_f = 2·max(δ)
+       - Step size η = 1/L_f = 1/(2·max(δ))
+       - Proximal operator: soft_threshold(gradient_step, η·λ_nn)
+       - Inner solver uses FISTA/Nesterov acceleration (O(1/k²))
+   - Continue until max(|L_new - L_old|) < tol
+
+3. **Post-hoc**: Extract τ̂_{it} = Y_{it} - μ̂ - α̂_i - β̂_t - L̂_{it} for treated cells
 
 **LOOCV parameter selection** (unified with twostep, Equation 5):
 Following paper's Equation 5 and footnote 2:
@@ -1390,10 +1412,10 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 where τ̂_js^loocv is the pseudo-treatment effect at control observation (j,s)
 with that observation excluded from fitting.
 
-For joint method, LOOCV works as follows:
+For global method, LOOCV works as follows:
 1. For each control observation (t, i):
    - Zero out weight δ_{ti} = 0 (exclude from weighted objective)
-   - Fit joint model on remaining data → obtain (μ̂, α̂, β̂, L̂)
+   - Fit global model on remaining data → obtain (μ̂, α̂, β̂, L̂)
    - Compute pseudo-treatment: τ̂_{ti} = Y_{ti} - μ̂ - α̂_i - β̂_t - L̂_{ti}
 2. Score = Σ τ̂_{ti}² (sum of squared pseudo-treatment effects)
 3. Select λ combination that minimizes Q(λ)
@@ -1403,13 +1425,15 @@ For joint method, LOOCV works as follows:
 - `bootstrap_trop_variance_joint()` - Parallel bootstrap variance estimation
 
 **Key differences from twostep method**:
-- Treatment effect τ is a single scalar (homogeneous assumption) vs. per-observation τ_{it}
 - Global weights (distance to treated block center) vs. per-observation weights
 - Single model fit per λ combination vs. N_treated fits
+- Treatment effects are post-hoc residuals from a single global model (global)
+  vs. post-hoc residuals from per-observation models (twostep)
+- Both use (1-W) masking (control-only fitting)
 - Faster computation for large panels
 
 **Assumptions**:
-- **Simultaneous adoption (enforced)**: The joint method requires all treated units
+- **Simultaneous adoption (enforced)**: The global method requires all treated units
   to receive treatment at the same time. A `ValueError` is raised if staggered
   adoption is detected (units first treated at different periods). Treatment timing is
   inferred once and held constant for bootstrap variance estimation.
@@ -1417,12 +1441,25 @@ For joint method, LOOCV works as follows:
 
 **Reference**: Adapted from reference implementation. See also Athey et al. (2025).
 
+**Edge Cases (treated NaN outcomes):**
+- **Partial NaN**: When some treated outcomes Y_{it} are NaN/missing:
+  - `_extract_posthoc_tau()` (global) skips these cells; only finite τ̂ values are averaged
+  - Twostep loop skips NaN outcomes entirely (no model fit, no tau appended)
+  - `n_treated_obs` in results reflects valid (finite) count, not total D==1 count
+  - `df_trop = max(1, n_valid_treated - 1)` uses valid count
+  - Warning issued when n_valid_treated < total treated count
+- **All NaN**: When all treated outcomes are NaN:
+  - ATT = NaN, warning issued
+  - `n_treated_obs = 0`
+- **Bootstrap SE with <2 draws**: Returns `se=NaN` (not 0.0) when zero bootstrap
+  iterations succeed. `safe_inference()` propagates NaN downstream.
+
 **Requirements checklist:**
 - [x] Same LOOCV framework as twostep (Equation 5)
 - [x] Global weight computation using treated block center
-- [x] Weighted least squares with treatment indicator
+- [x] (1-W) masking for control-only fitting (per paper Eq. 2)
 - [x] Alternating minimization for nuclear norm penalty
-- [x] Returns scalar τ (homogeneous treatment effect)
+- [x] Returns ATT = mean of per-observation post-hoc τ̂_{it}
 - [x] Rust acceleration for LOOCV and bootstrap
 
 ---
