@@ -1234,6 +1234,20 @@ class TROP:
             Y, D, mu, alpha, beta, L, idx_to_unit, idx_to_period
         )
 
+        # Use count of valid (finite) treated outcomes for df and metadata
+        n_valid_treated = len(tau_values)
+        if n_valid_treated == 0:
+            warnings.warn(
+                "All treated outcomes are NaN/missing. Cannot estimate ATT.",
+                UserWarning,
+            )
+        elif n_valid_treated < n_treated_obs:
+            warnings.warn(
+                f"Only {n_valid_treated} of {n_treated_obs} treated outcomes are finite. "
+                "df and n_treated_obs reflect valid observations only.",
+                UserWarning,
+            )
+
         # Compute effective rank of L
         _, s, _ = np.linalg.svd(L, full_matrices=False)
         if s[0] > 0:
@@ -1250,7 +1264,7 @@ class TROP:
         )
 
         # Compute test statistics
-        df_trop = max(1, n_treated_obs - 1)
+        df_trop = max(1, n_valid_treated - 1)
         t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_trop)
 
         # Create results dictionaries
@@ -1266,7 +1280,7 @@ class TROP:
             n_obs=len(data),
             n_treated=len(treated_unit_idx),
             n_control=len(control_unit_idx),
-            n_treated_obs=int(n_treated_obs),
+            n_treated_obs=int(n_valid_treated),
             unit_effects=unit_effects_dict,
             time_effects=time_effects_dict,
             treatment_effects=treatment_effects,
@@ -1358,7 +1372,7 @@ class TROP:
                         UserWarning
                     )
                     if len(bootstrap_estimates) == 0:
-                        return 0.0, np.array([])
+                        return np.nan, np.array([])
 
                 return float(se), np.array(bootstrap_estimates)
 
@@ -1422,7 +1436,7 @@ class TROP:
                 UserWarning
             )
             if len(bootstrap_estimates) == 0:
-                return 0.0, np.array([])
+                return np.nan, np.array([])
 
         se = np.std(bootstrap_estimates, ddof=1)
         return float(se), bootstrap_estimates
@@ -1771,6 +1785,15 @@ class TROP:
         treated_observations = self._precomputed["treated_observations"]
 
         for t, i in treated_observations:
+            unit_id = idx_to_unit[i]
+            time_id = idx_to_period[t]
+
+            # Skip observations where outcome is missing — record NaN but
+            # don't fit the model or include in tau_values (avoids NaN poisoning)
+            if not np.isfinite(Y[t, i]):
+                treatment_effects[(unit_id, time_id)] = np.nan
+                continue
+
             # Compute observation-specific weights for this (i, t)
             weight_matrix = self._compute_observation_weights(
                 Y, D, i, t, lambda_time, lambda_unit, control_unit_idx,
@@ -1786,8 +1809,6 @@ class TROP:
             # Compute treatment effect: τ̂_{it} = Y_{it} - α̂_i - β̂_t - L̂_{it}
             tau_it = Y[t, i] - alpha_hat[i] - beta_hat[t] - L_hat[t, i]
 
-            unit_id = idx_to_unit[i]
-            time_id = idx_to_period[t]
             treatment_effects[(unit_id, time_id)] = tau_it
             tau_values.append(tau_it)
 
@@ -1796,8 +1817,22 @@ class TROP:
             beta_estimates.append(beta_hat)
             L_estimates.append(L_hat)
 
+        # Count valid treated observations
+        n_valid_treated = len(tau_values)
+        if n_valid_treated == 0:
+            warnings.warn(
+                "All treated outcomes are NaN/missing. Cannot estimate ATT.",
+                UserWarning,
+            )
+        elif n_valid_treated < n_treated_obs:
+            warnings.warn(
+                f"Only {n_valid_treated} of {n_treated_obs} treated outcomes are finite. "
+                "df and n_treated_obs reflect valid observations only.",
+                UserWarning,
+            )
+
         # Average ATT
-        att = np.mean(tau_values)
+        att = np.mean(tau_values) if tau_values else np.nan
 
         # Average parameter estimates for output (representative)
         alpha_hat = np.mean(alpha_estimates, axis=0) if alpha_estimates else np.zeros(n_units)
@@ -1820,7 +1855,7 @@ class TROP:
         )
 
         # Compute test statistics
-        df_trop = max(1, n_treated_obs - 1)
+        df_trop = max(1, n_valid_treated - 1)
         t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_trop)
 
         # Create results dictionaries
@@ -1837,7 +1872,7 @@ class TROP:
             n_obs=len(data),
             n_treated=len(treated_unit_idx),
             n_control=len(control_unit_idx),
-            n_treated_obs=n_treated_obs,
+            n_treated_obs=int(n_valid_treated),
             unit_effects=unit_effects_dict,
             time_effects=time_effects_dict,
             treatment_effects=treatment_effects,
@@ -2528,7 +2563,7 @@ class TROP:
                 UserWarning
             )
             if len(bootstrap_estimates) == 0:
-                return 0.0, np.array([])
+                return np.nan, np.array([])
 
         se = np.std(bootstrap_estimates, ddof=1)
         return float(se), bootstrap_estimates

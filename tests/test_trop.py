@@ -3424,3 +3424,215 @@ class TestTROPJointMethod:
         assert np.allclose(beta1, beta2, atol=1e-8), "beta changed"
         assert np.allclose(L1, L2, atol=1e-8), "L changed"
 
+
+class TestTROPNValidTreated:
+    """Tests for n_valid_treated consistency and NaN treated outcome handling."""
+
+    @staticmethod
+    def _make_panel(n_units=20, n_periods=8, n_treated=5, n_post=3,
+                    effect=2.0, seed=42):
+        """Helper: generate a clean panel DataFrame."""
+        rng = np.random.default_rng(seed)
+        rows = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 5.0 + i * 0.3 + t * 0.2 + rng.normal() * 0.3
+                d = 1 if (is_treated and post) else 0
+                if d:
+                    y += effect
+                rows.append({'unit': i, 'time': t, 'outcome': y, 'treated': d})
+        return pd.DataFrame(rows)
+
+    def test_global_n_treated_obs_partial_nan(self):
+        """Global method: n_treated_obs reflects only finite outcomes."""
+        df = self._make_panel()
+
+        # Inject NaN into some treated outcomes
+        treated_mask = (df['treated'] == 1)
+        treated_idx = df[treated_mask].index.tolist()
+        n_nan = 3
+        for idx in treated_idx[:n_nan]:
+            df.loc[idx, 'outcome'] = np.nan
+
+        total_treated = int(treated_mask.sum())
+
+        trop_est = TROP(
+            method="global",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=2,
+            seed=42,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = trop_est.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        assert results.n_treated_obs == total_treated - n_nan, \
+            f"Expected {total_treated - n_nan}, got {results.n_treated_obs}"
+        assert np.isfinite(results.att)
+
+    def test_twostep_n_treated_obs_partial_nan(self):
+        """Twostep method: n_treated_obs reflects only finite outcomes."""
+        df = self._make_panel()
+
+        treated_mask = (df['treated'] == 1)
+        treated_idx = df[treated_mask].index.tolist()
+        n_nan = 3
+        for idx in treated_idx[:n_nan]:
+            df.loc[idx, 'outcome'] = np.nan
+
+        total_treated = int(treated_mask.sum())
+
+        trop_est = TROP(
+            method="twostep",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=2,
+            seed=42,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = trop_est.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        assert results.n_treated_obs == total_treated - n_nan, \
+            f"Expected {total_treated - n_nan}, got {results.n_treated_obs}"
+        assert np.isfinite(results.att)
+
+    def test_twostep_nan_treated_not_poison_att(self):
+        """Twostep: NaN treated outcomes don't poison ATT via np.mean."""
+        df = self._make_panel(effect=3.0)
+
+        # Make ONE treated outcome NaN
+        treated_mask = (df['treated'] == 1)
+        first_treated_idx = df[treated_mask].index[0]
+        df.loc[first_treated_idx, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="twostep",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=2,
+            seed=42,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = trop_est.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        # ATT must be finite (not NaN from NaN poisoning)
+        assert np.isfinite(results.att), f"ATT should be finite, got {results.att}"
+        # ATT should be in reasonable range
+        assert results.att > 1.0, f"ATT {results.att} should reflect treatment effect"
+
+    def test_global_all_treated_nan_warns(self):
+        """Global method warns when all treated outcomes are NaN."""
+        df = self._make_panel()
+
+        # Set ALL treated outcomes to NaN
+        df.loc[df['treated'] == 1, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="global",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=2,
+            seed=42,
+        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = trop_est.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        # Should warn about all NaN treated
+        nan_warnings = [x for x in w if "All treated outcomes are NaN" in str(x.message)]
+        assert len(nan_warnings) > 0, "Should warn about all-NaN treated outcomes"
+        assert results.n_treated_obs == 0
+        assert np.isnan(results.att)
+
+    def test_twostep_all_treated_nan_warns(self):
+        """Twostep method warns when all treated outcomes are NaN."""
+        df = self._make_panel()
+
+        df.loc[df['treated'] == 1, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="twostep",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=2,
+            seed=42,
+        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = trop_est.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        nan_warnings = [x for x in w if "All treated outcomes are NaN" in str(x.message)]
+        assert len(nan_warnings) > 0, "Should warn about all-NaN treated outcomes"
+        assert results.n_treated_obs == 0
+        assert np.isnan(results.att)
+
+
+class TestTROPBootstrapNaNSE:
+    """Tests for NaN SE when bootstrap has <2 successful draws."""
+
+    def test_global_bootstrap_zero_draws_returns_nan_se(self):
+        """Global bootstrap with 0 successful draws returns NaN SE, not 0.0."""
+        from unittest.mock import patch
+
+        df = TestTROPNValidTreated._make_panel()
+
+        trop_est = TROP(
+            method="global",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=5,
+            seed=42,
+        )
+
+        # Patch _fit_joint_with_fixed_lambda to always raise (all bootstrap iters fail)
+        with patch.object(TROP, '_fit_joint_with_fixed_lambda',
+                          side_effect=ValueError("forced failure")):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                se, dist = trop_est._bootstrap_variance_joint(
+                    df, 'outcome', 'treated', 'unit', 'time',
+                    (1.0, 1.0, 1e10), 3,
+                )
+
+        assert np.isnan(se), f"SE should be NaN when 0 draws succeed, got {se}"
+        assert len(dist) == 0
+
+    def test_twostep_bootstrap_zero_draws_returns_nan_se(self):
+        """Twostep bootstrap with 0 successful draws returns NaN SE, not 0.0."""
+        from unittest.mock import patch
+
+        df = TestTROPNValidTreated._make_panel()
+
+        trop_est = TROP(
+            method="twostep",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=5,
+            seed=42,
+        )
+
+        # Patch _fit_with_fixed_lambda to always raise
+        with patch.object(TROP, '_fit_with_fixed_lambda',
+                          side_effect=ValueError("forced failure")):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                se, dist = trop_est._bootstrap_variance(
+                    df, 'outcome', 'treated', 'unit', 'time',
+                    (1.0, 1.0, 1e10),
+                )
+
+        assert np.isnan(se), f"SE should be NaN when 0 draws succeed, got {se}"
+        assert len(dist) == 0
+

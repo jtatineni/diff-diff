@@ -1225,7 +1225,7 @@ Treatment effects are **heterogeneous** per-observation values. ATT is their mea
        - Lipschitz constant of ∇f is L_f = 2·max(δ)
        - Step size η = 1/L_f = 1/(2·max(δ))
        - Proximal operator: soft_threshold(gradient_step, η·λ_nn)
-       - Twostep inner solver uses FISTA/Nesterov acceleration (O(1/k²))
+       - Inner solver uses FISTA/Nesterov acceleration (O(1/k²))
    - Continue until max(|L_new - L_old|) < tol
 
 3. **Post-hoc**: Extract τ̂_{it} = Y_{it} - μ̂ - α̂_i - β̂_t - L̂_{it} for treated cells
@@ -1266,6 +1266,19 @@ For global method, LOOCV works as follows:
   For staggered adoption designs, use `method="twostep"`.
 
 **Reference**: Adapted from reference implementation. See also Athey et al. (2025).
+
+**Edge Cases (treated NaN outcomes):**
+- **Partial NaN**: When some treated outcomes Y_{it} are NaN/missing:
+  - `_extract_posthoc_tau()` (global) skips these cells; only finite τ̂ values are averaged
+  - Twostep loop skips NaN outcomes entirely (no model fit, no tau appended)
+  - `n_treated_obs` in results reflects valid (finite) count, not total D==1 count
+  - `df_trop = max(1, n_valid_treated - 1)` uses valid count
+  - Warning issued when n_valid_treated < total treated count
+- **All NaN**: When all treated outcomes are NaN:
+  - ATT = NaN, warning issued
+  - `n_treated_obs = 0`
+- **Bootstrap SE with <2 draws**: Returns `se=NaN` (not 0.0) when zero bootstrap
+  iterations succeed. `safe_inference()` propagates NaN downstream.
 
 **Requirements checklist:**
 - [x] Same LOOCV framework as twostep (Equation 5)

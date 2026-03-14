@@ -211,27 +211,27 @@ Quick estimation with convenience function::
         n_bootstrap=200
     )
 
-Using the joint method for faster estimation::
+Using the global method for faster estimation::
 
     from diff_diff import TROP
 
-    # Joint method: single scalar treatment effect via weighted LS
-    trop_joint = TROP(
-        method='joint',  # Use joint weighted least squares
+    # Global method: computationally efficient adaptation using (1-W) masking
+    trop_global = TROP(
+        method='global',
         lambda_time_grid=[0.0, 0.5, 1.0, 2.0],
         lambda_unit_grid=[0.0, 0.5, 1.0, 2.0],
         lambda_nn_grid=[0.0, 0.1, 1.0],
         n_bootstrap=200,
         seed=42
     )
-    results_joint = trop_joint.fit(data, outcome='y', treatment='treated',
-                                    unit='unit_id', time='period')
+    results_global = trop_global.fit(data, outcome='y', treatment='treated',
+                                      unit='unit_id', time='period')
 
     # Compare methods
-    trop_twostep = TROP(method='twostep', ...)  # Default
+    trop_twostep = TROP(method='twostep', ...)  # Default (per-observation)
     results_twostep = trop_twostep.fit(data, ...)
     print(f"Two-step ATT: {results_twostep.att:.3f}")
-    print(f"Joint ATT: {results_joint.att:.3f}")
+    print(f"Global ATT: {results_global.att:.3f}")
 
 Examining factor structure::
 

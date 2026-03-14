@@ -1255,6 +1255,8 @@ fn solve_joint_no_lowrank(
 
     for _ in 0..50 {
         let mu_old = mu;
+        let alpha_old = alpha.clone();
+        let beta_old = beta.clone();
 
         // Update alpha (fixing beta, mu)
         for i in 1..n_units {  // α_0 = 0 for identification
@@ -1296,8 +1298,16 @@ fn solve_joint_no_lowrank(
         }
         mu = num_mu / sum_w;
 
-        // Check convergence
-        if (mu - mu_old).abs() < 1e-8 {
+        // Check convergence across ALL parameters (not just mu)
+        let mu_diff = (mu - mu_old).abs();
+        let alpha_diff = alpha.iter().zip(alpha_old.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
+        let beta_diff = beta.iter().zip(beta_old.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
+        let max_diff = mu_diff.max(alpha_diff).max(beta_diff);
+        if max_diff < 1e-8 {
             break;
         }
     }

@@ -1682,6 +1682,141 @@ class TestTROPJointRustVsNumpy:
             f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) " \
             f"differ by {att_diff:.3f}, should be < 0.5"
 
+    def test_trop_joint_solver_parity_no_lowrank(self):
+        """Test Rust/Python solver parity for no-lowrank path (lambda_nn >= 1e10).
+
+        Both backends should produce matching (mu, alpha, beta) at atol=1e-6.
+        This validates the convergence criterion fix (checking all params, not just mu).
+        """
+        import pandas as pd
+        from diff_diff import TROP
+        from unittest.mock import patch
+        import sys
+
+        np.random.seed(42)
+        n_units, n_periods = 15, 8
+        n_treated = 4
+        n_post = 3
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 5.0 + i * 0.5 + t * 0.4 + np.random.randn() * 0.2
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += 2.0
+                data.append({
+                    'unit': i, 'time': t,
+                    'outcome': y, 'treated': treatment_indicator,
+                })
+        df = pd.DataFrame(data)
+
+        # Fixed lambda with lambda_nn=inf (no low-rank)
+        trop_params = dict(
+            method="global",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[np.inf],
+            n_bootstrap=2,
+            seed=42,
+        )
+
+        # Rust backend
+        trop_rust = TROP(**trop_params)
+        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+
+        # Python-only backend
+        trop_module = sys.modules['diff_diff.trop']
+        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
+             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+            trop_python = TROP(**trop_params)
+            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+
+        # ATT should match closely
+        assert abs(results_rust.att - results_python.att) < 1e-6, \
+            f"No-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
+
+        # Unit and time effects should match
+        for key in results_rust.unit_effects:
+            r_val = results_rust.unit_effects[key]
+            p_val = results_python.unit_effects[key]
+            assert abs(r_val - p_val) < 1e-6, \
+                f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+
+        for key in results_rust.time_effects:
+            r_val = results_rust.time_effects[key]
+            p_val = results_python.time_effects[key]
+            assert abs(r_val - p_val) < 1e-6, \
+                f"Time effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+
+    def test_trop_joint_solver_parity_with_lowrank(self):
+        """Test Rust/Python solver parity for with-lowrank path (finite lambda_nn).
+
+        Both backends should produce matching (mu, alpha, beta) at atol=1e-6.
+        The with-lowrank solver calls no-lowrank as its inner step, so the
+        convergence fix cascades here too.
+        """
+        import pandas as pd
+        from diff_diff import TROP
+        from unittest.mock import patch
+        import sys
+
+        np.random.seed(42)
+        n_units, n_periods = 15, 8
+        n_treated = 4
+        n_post = 3
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 5.0 + i * 0.5 + t * 0.4 + np.random.randn() * 0.2
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += 2.0
+                data.append({
+                    'unit': i, 'time': t,
+                    'outcome': y, 'treated': treatment_indicator,
+                })
+        df = pd.DataFrame(data)
+
+        # Fixed lambda with finite lambda_nn (low-rank enabled)
+        trop_params = dict(
+            method="global",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=42,
+        )
+
+        # Rust backend
+        trop_rust = TROP(**trop_params)
+        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+
+        # Python-only backend
+        trop_module = sys.modules['diff_diff.trop']
+        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
+             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+            trop_python = TROP(**trop_params)
+            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+
+        # ATT should match closely
+        assert abs(results_rust.att - results_python.att) < 1e-6, \
+            f"With-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
+
+        # Unit and time effects should match
+        for key in results_rust.unit_effects:
+            r_val = results_rust.unit_effects[key]
+            p_val = results_python.unit_effects[key]
+            assert abs(r_val - p_val) < 1e-6, \
+                f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
 class TestSDIDRustBackend:
