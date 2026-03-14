@@ -177,6 +177,9 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
         def compare(label, base_val, cur_val, t):
             if np.isnan(base_val) and np.isnan(cur_val):
                 return
+            if np.isnan(base_val) or np.isnan(cur_val):
+                failures.append(f"  {label}: NaN mismatch baseline={base_val}, current={cur_val}")
+                return
             diff = abs(base_val - cur_val)
             if diff > t:
                 failures.append(f"  {label}: baseline={base_val:.15e}, current={cur_val:.15e}, diff={diff:.2e}")

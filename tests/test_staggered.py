@@ -1120,7 +1120,9 @@ class TestCallawaySantAnnaCovariates:
         def mock_lstsq(*args, **kwargs):
             call_count[0] += 1
             result = original_lstsq(*args, **kwargs)
-            if call_count[0] == 1:
+            # Poison call #7 — corresponds to (g=3, t=3), a post-treatment cell,
+            # so the overall ATT bootstrap aggregation path is exercised.
+            if call_count[0] == 7:
                 bad_beta = np.full_like(result[0], np.inf)
                 return (bad_beta,) + result[1:]
             return result
@@ -1151,6 +1153,12 @@ class TestCallawaySantAnnaCovariates:
             if np.isnan(eff['effect'])
         ]
         assert len(nan_cells) > 0, "Expected at least one NaN cell from mock"
+
+        # Verify poisoned cell is post-treatment so overall ATT bootstrap path is exercised
+        post_treatment_nan = [(g, t) for g, t in nan_cells if t >= g - cs.anticipation]
+        assert len(post_treatment_nan) > 0, (
+            "Poisoned cell must be post-treatment to exercise overall ATT bootstrap filtering"
+        )
 
         # Overall ATT bootstrap inference should be finite (NaN cells excluded)
         assert np.isfinite(results.overall_att), "overall_att should be finite"

@@ -233,7 +233,7 @@ class CallawaySantAnnaBootstrapMixin:
         if skip_overall_aggregation:
             original_overall = np.nan
         else:
-            original_overall = np.sum(overall_weights_post * original_atts[post_treatment_mask])
+            original_overall = np.sum(overall_weights_post * original_atts[post_treatment_indices])
 
         # Prepare event study and group aggregation info if needed
         event_study_info = None
