@@ -59,8 +59,9 @@ When reviewing new features or code paths, specifically check:
 This project tracks deferred technical debt in `TODO.md` under "Tech Debt from Code Reviews."
 
 - If a limitation is already tracked in `TODO.md` with a PR reference, it is NOT a blocker.
-- If a PR ADDS a new `TODO.md` entry for deferred work, that counts as properly tracking it.
-  Classify as P3-informational ("tracked in TODO.md"), not P1/P2.
+- If a PR ADDS a new `TODO.md` entry for deferred work, that counts as properly tracking
+  deferrable items (test gaps, documentation, performance). Classify those as
+  P3-informational ("tracked in TODO.md"), not P1/P2.
 - Only flag deferred work as P1+ if it introduces a SILENT correctness bug (wrong numbers
   with no warning/error) that is NOT tracked anywhere.
 - Test gaps, documentation gaps, and performance improvements are deferrable. Missing NaN guards
@@ -97,6 +98,12 @@ A finding is MITIGATED (does not count toward assessment) if:
 - The limitation is tracked in `TODO.md` under "Tech Debt from Code Reviews"
 - The PR itself adds a TODO.md entry or REGISTRY.md note for the issue
 - The finding is about an implementation choice between valid numerical approaches
+
+A finding is NEVER mitigated by TODO.md tracking if it is:
+- A P0: silent correctness bug, NaN/inference inconsistency, data corruption, or security issue
+- A P1: missing assumption check, incorrect variance/SE, or undocumented methodology deviation
+Only P2/P3 findings (code quality, test gaps, documentation, performance) can be downgraded
+by tracking in TODO.md.
 
 When the assessment is ⚠️ or ⛔, include a "Path to Approval" section listing specific,
 enumerated changes that would move the assessment to ✅. Each item must be concrete and
