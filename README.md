@@ -1090,7 +1090,7 @@ results = edid.fit(data, outcome='outcome', unit='unit',
                    aggregate='all')
 results.print_summary()
 
-# PT-Post mode (reduces to Callaway-Sant'Anna)
+# PT-Post mode (matches CS for post-treatment effects)
 edid_post = EfficientDiD(pt_assumption="post")
 results_post = edid_post.fit(data, outcome='outcome', unit='unit',
                               time='period', first_treat='first_treat')
@@ -1100,7 +1100,7 @@ results_post = edid_post.fit(data, outcome='outcome', unit='unit',
 
 ```python
 EfficientDiD(
-    pt_assumption='all',            # 'all' (overidentified) or 'post' (= CS)
+    pt_assumption='all',            # 'all' (overidentified) or 'post' (matches CS post-treatment ATT)
     alpha=0.05,                     # Significance level
     n_bootstrap=0,                  # Bootstrap iterations (0 = analytical only)
     bootstrap_weights='rademacher', # 'rademacher', 'mammen', or 'webb'

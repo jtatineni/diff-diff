@@ -10,7 +10,7 @@ This module implements the efficiency-bound-attaining estimator that:
 2. **Optimally weights** across comparison groups and baselines via the
    inverse covariance matrix Ω*
 3. **Supports two PT assumptions**: PT-All (overidentified, tighter SEs) and
-   PT-Post (just-identified, equivalent to Callaway-Sant'Anna)
+   PT-Post (just-identified, matches CS for post-treatment effects)
 4. **Uses EIF-based inference** for analytical standard errors and multiplier
    bootstrap
 
@@ -26,8 +26,8 @@ This module implements the efficiency-bound-attaining estimator that:
 - You want tighter confidence intervals than Callaway-Sant'Anna
 - You need a formal efficiency benchmark for comparing estimators
 
-**Reference:** Chen, J., Sant'Anna, P. H. C., & Xie, Y. (2025). Efficient
-Difference-in-Differences. *Working Paper*.
+**Reference:** Chen, X., Sant'Anna, P. H. C., & Xie, H. (2025). Efficient
+Difference-in-Differences and Event Study Estimators. *Working Paper*.
 
 .. module:: diff_diff.efficient_did
 
@@ -94,7 +94,7 @@ Basic usage::
                        aggregate='all')
     results.print_summary()
 
-PT-Post mode (equivalent to Callaway-Sant'Anna)::
+PT-Post mode (matches CS for post-treatment ATT)::
 
     edid_post = EfficientDiD(pt_assumption="post")
     results_post = edid_post.fit(data, outcome='outcome', unit='unit',
@@ -145,6 +145,6 @@ Comparison with Other Staggered Estimators
      - Multiplier bootstrap
      - Multiplier bootstrap
    * - PT-Post equivalence
-     - Reduces to CS
+     - Matches CS post-treatment ATT(g,t)
      - Baseline
      - Different framework

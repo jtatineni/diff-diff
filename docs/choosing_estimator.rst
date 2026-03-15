@@ -65,7 +65,7 @@ Quick Reference
      - ATT with unit/time weights
    * - ``EfficientDiD``
      - Staggered adoption with optimal efficiency
-     - PT-All (overidentified) or PT-Post (= CS)
+     - PT-All (overidentified) or PT-Post
      - Group-time ATT(g,t), aggregations
    * - ``ContinuousDiD``
      - Continuous dose / treatment intensity
