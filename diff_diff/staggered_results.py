@@ -88,7 +88,7 @@ class CallawaySantAnnaResults:
     n_treated_units : int
         Number of ever-treated units.
     n_control_units : int
-        Number of never-treated units.
+        Number of never-treated units (excludes not-yet-treated dynamic controls).
     event_study_effects : dict, optional
         Effects aggregated by relative time (event study).
     group_effects : dict, optional
@@ -152,7 +152,7 @@ class CallawaySantAnnaResults:
             "",
             f"{'Total observations:':<30} {self.n_obs:>10}",
             f"{'Treated units:':<30} {self.n_treated_units:>10}",
-            f"{'Control units:':<30} {self.n_control_units:>10}",
+            f"{'Never-treated units:':<30} {self.n_control_units:>10}",
             f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
             f"{'Time periods:':<30} {len(self.time_periods):>10}",
             f"{'Control group:':<30} {self.control_group:>10}",
