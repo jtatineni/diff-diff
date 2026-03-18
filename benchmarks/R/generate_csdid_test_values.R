@@ -169,13 +169,13 @@ data4 <- build_sim_dataset(sp4)
 
 res4 <- att_gt(yname = "Y", xformla = ~X, data = data4, tname = "period",
                idname = "id", gname = "G", est_method = "reg",
-               bstrap = FALSE, cband = FALSE, panel = FALSE)
+               bstrap = FALSE, cband = FALSE)
 agg4_dynamic <- aggte(res4, type = "dynamic", bstrap = FALSE, cband = FALSE)
 
 scenarios$dynamic_effects <- list(
   data = export_data(data4),
   params = list(est_method = "reg", control_group = "nevertreated",
-                xformla = "~X", base_period = "varying", panel = FALSE),
+                xformla = "~X", base_period = "varying"),
   results = list(
     group_time = extract_gt(res4),
     dynamic = extract_agg(agg4_dynamic)
@@ -198,7 +198,7 @@ data5 <- subset(data5, period %in% keep.periods)
 
 res5 <- att_gt(yname = "Y", xformla = ~X, data = data5, tname = "period",
                idname = "id", gname = "G", est_method = "reg",
-               bstrap = FALSE, cband = FALSE, panel = FALSE)
+               bstrap = FALSE, cband = FALSE)
 agg5_dynamic <- aggte(res5, type = "dynamic", bstrap = FALSE, cband = FALSE)
 agg5_balance <- aggte(res5, type = "dynamic", balance_e = 0,
                       bstrap = FALSE, cband = FALSE)
@@ -206,7 +206,7 @@ agg5_balance <- aggte(res5, type = "dynamic", balance_e = 0,
 scenarios$non_consecutive_periods <- list(
   data = export_data(data5),
   params = list(est_method = "reg", control_group = "nevertreated",
-                xformla = "~X", base_period = "varying", panel = FALSE),
+                xformla = "~X", base_period = "varying"),
   results = list(
     group_time = extract_gt(res5),
     dynamic = extract_agg(agg5_dynamic),
