@@ -1522,7 +1522,7 @@ fn loocv_score_joint(
 #[pyfunction]
 #[pyo3(signature = (y, d, control_mask, lambda_time_grid, lambda_unit_grid, lambda_nn_grid, max_iter, tol))]
 #[allow(clippy::too_many_arguments)]
-pub fn loocv_grid_search_joint<'py>(
+pub fn loocv_grid_search_global<'py>(
     _py: Python<'py>,
     y: PyReadonlyArray2<'py, f64>,
     d: PyReadonlyArray2<'py, f64>,
@@ -1651,7 +1651,7 @@ pub fn loocv_grid_search_joint<'py>(
 #[pyfunction]
 #[pyo3(signature = (y, d, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, seed))]
 #[allow(clippy::too_many_arguments)]
-pub fn bootstrap_trop_variance_joint<'py>(
+pub fn bootstrap_trop_variance_global<'py>(
     py: Python<'py>,
     y: PyReadonlyArray2<'py, f64>,
     d: PyReadonlyArray2<'py, f64>,
