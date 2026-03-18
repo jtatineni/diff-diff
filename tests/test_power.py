@@ -1029,6 +1029,45 @@ class TestEstimatorCoverage:
                 progress=False,
             )
 
+    def test_sdid_placebo_rejects_n_treated_override(self):
+        """SDID placebo raises when data_generator_kwargs overrides n_treated."""
+        with pytest.raises(ValueError, match="placebo variance requires more control"):
+            simulate_power(
+                SyntheticDiD(),
+                n_units=50,
+                treatment_fraction=0.3,
+                data_generator_kwargs=dict(n_treated=30),
+                n_simulations=5,
+                seed=42,
+                progress=False,
+            )
+
+    def test_sdid_mde_rejects_n_treated_override(self):
+        """simulate_mde raises when kwargs override makes n_control <= n_treated."""
+        with pytest.raises(ValueError, match="placebo variance requires more control"):
+            simulate_mde(
+                SyntheticDiD(),
+                n_units=50,
+                treatment_fraction=0.3,
+                data_generator_kwargs=dict(n_treated=30),
+                n_simulations=5,
+                seed=42,
+                progress=False,
+            )
+
+    def test_sdid_sample_size_rejects_n_treated_override(self):
+        """simulate_sample_size raises when kwargs override is infeasible."""
+        with pytest.raises(ValueError, match="placebo variance requires more control"):
+            simulate_sample_size(
+                SyntheticDiD(),
+                treatment_fraction=0.3,
+                data_generator_kwargs=dict(n_treated=30),
+                n_range=(50, 100),
+                n_simulations=5,
+                seed=42,
+                progress=False,
+            )
+
     @pytest.mark.slow
     def test_sdid_mde(self):
         """simulate_mde works for SyntheticDiD with valid treatment_fraction."""

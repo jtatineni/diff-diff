@@ -1406,23 +1406,26 @@ def simulate_power(
     # When a custom data_generator is provided, bypass registry DGP
     use_custom_dgp = data_generator is not None
 
-    # SyntheticDiD placebo variance requires n_control > n_treated
+    data_gen_kwargs = data_generator_kwargs or {}
+    est_kwargs = estimator_kwargs or {}
+
+    # SyntheticDiD placebo variance requires n_control > n_treated.
+    # Check after merging data_generator_kwargs so overrides of n_treated
+    # are accounted for.
     if estimator_name == "SyntheticDiD" and not use_custom_dgp:
         vm = getattr(estimator, "variance_method", "placebo")
-        n_treated = max(1, int(n_units * treatment_fraction))
-        n_control = n_units - n_treated
-        if vm == "placebo" and n_control <= n_treated:
+        effective_n_treated = data_gen_kwargs.get(
+            "n_treated", max(1, int(n_units * treatment_fraction))
+        )
+        n_control = n_units - effective_n_treated
+        if vm == "placebo" and n_control <= effective_n_treated:
             raise ValueError(
                 f"SyntheticDiD placebo variance requires more control than "
                 f"treated units (got n_control={n_control}, "
-                f"n_treated={n_treated} from treatment_fraction="
-                f"{treatment_fraction}). Either lower treatment_fraction "
-                f"so that n_control > n_treated, or use "
+                f"n_treated={effective_n_treated}). Either lower "
+                f"treatment_fraction so that n_control > n_treated, or use "
                 f"SyntheticDiD(variance_method='bootstrap')."
             )
-
-    data_gen_kwargs = data_generator_kwargs or {}
-    est_kwargs = estimator_kwargs or {}
 
     # Warn if staggered estimator settings don't match auto DGP
     if profile is not None and not use_custom_dgp:
