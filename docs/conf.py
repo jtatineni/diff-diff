@@ -65,7 +65,12 @@ napoleon_attr_annotations = True
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
 html_title = "diff-diff: Difference-in-Differences Causal Inference for Python"
-html_baseurl = "https://diff-diff.readthedocs.io/en/stable/"
+# Use RTD's canonical URL when available; fall back to stable for local builds.
+_canonical_url = os.environ.get(
+    "READTHEDOCS_CANONICAL_URL",
+    "https://diff-diff.readthedocs.io/en/stable/",
+)
+html_baseurl = _canonical_url
 html_extra_path = ["llms.txt", "llms-full.txt"]
 sitemap_url_scheme = "{link}"
 
@@ -95,7 +100,7 @@ html_context = {
 }
 
 # -- Options for sphinxext-opengraph -----------------------------------------
-ogp_site_url = "https://diff-diff.readthedocs.io/en/stable/"
+ogp_site_url = _canonical_url
 ogp_site_name = "diff-diff"
 ogp_description_length = 200
 ogp_type = "website"
