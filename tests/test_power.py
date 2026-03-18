@@ -44,6 +44,7 @@ from diff_diff.power import (
     _staggered_fit_kwargs,
     _trop_fit_kwargs,
 )
+from diff_diff.prep import generate_did_data
 
 
 class TestPowerAnalysis:
@@ -800,17 +801,10 @@ class TestEstimatorRegistry:
                 progress=False,
             )
 
-    def test_twfe_not_in_registry(self):
-        """TwoWayFixedEffects is not in registry and raises without custom data_generator."""
+    def test_twfe_in_registry(self):
+        """TwoWayFixedEffects is in the registry."""
         registry = _get_registry()
-        assert "TwoWayFixedEffects" not in registry
-
-        with pytest.raises(ValueError, match="not in registry"):
-            simulate_power(
-                TwoWayFixedEffects(),
-                n_simulations=5,
-                progress=False,
-            )
+        assert "TwoWayFixedEffects" in registry
 
     def test_unknown_estimator_raises_without_data_generator(self):
         """Unknown estimator without data_generator raises ValueError."""
@@ -1065,6 +1059,83 @@ class TestEstimatorCoverage:
         )
         assert isinstance(result, SimulationSampleSizeResults)
         assert result.required_n > 0
+
+    @pytest.mark.slow
+    def test_twfe(self):
+        result = simulate_power(
+            TwoWayFixedEffects(),
+            n_simulations=5,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "TwoWayFixedEffects")
+
+    @pytest.mark.slow
+    def test_twfe_mde(self):
+        result = simulate_mde(
+            TwoWayFixedEffects(),
+            n_simulations=5,
+            effect_range=(0.5, 5.0),
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationMDEResults)
+        assert result.mde > 0
+
+    @pytest.mark.slow
+    def test_twfe_sample_size(self):
+        result = simulate_sample_size(
+            TwoWayFixedEffects(),
+            n_simulations=5,
+            n_range=(20, 100),
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationSampleSizeResults)
+        assert result.required_n > 0
+
+    @pytest.mark.slow
+    def test_custom_fallback_unregistered_estimator(self):
+        """Unregistered estimator works with custom data_generator and estimator_kwargs."""
+
+        class _UnregisteredEstimator:
+            """Unregistered wrapper for testing custom fallback."""
+
+            def __init__(self):
+                self._inner = DifferenceInDifferences()
+
+            def fit(self, data, **kwargs):
+                return self._inner.fit(data, **kwargs)
+
+        result = simulate_power(
+            _UnregisteredEstimator(),
+            data_generator=generate_did_data,
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            n_simulations=5,
+            seed=42,
+            progress=False,
+        )
+        assert 0 <= result.power <= 1
+        assert result.n_simulations > 0
+
+    def test_custom_fallback_missing_kwargs_raises(self):
+        """Unregistered estimator with no estimator_kwargs fails on fit."""
+
+        class _UnregisteredEstimator:
+            def __init__(self):
+                self._inner = DifferenceInDifferences()
+
+            def fit(self, data, **kwargs):
+                return self._inner.fit(data, **kwargs)
+
+        with pytest.raises((ValueError, TypeError, RuntimeError)):
+            simulate_power(
+                _UnregisteredEstimator(),
+                data_generator=generate_did_data,
+                n_simulations=5,
+                seed=42,
+                progress=False,
+            )
 
 
 # ---------------------------------------------------------------------------

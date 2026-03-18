@@ -136,6 +136,15 @@ def _basic_fit_kwargs(
     return dict(outcome="outcome", treatment="treated", time="post")
 
 
+def _twfe_fit_kwargs(
+    data: pd.DataFrame,
+    n_units: int,
+    n_periods: int,
+    treatment_period: int,
+) -> Dict[str, Any]:
+    return dict(outcome="outcome", treatment="treated", time="post", unit="unit")
+
+
 def _multiperiod_fit_kwargs(
     data: pd.DataFrame,
     n_units: int,
@@ -252,6 +261,13 @@ def _get_registry() -> Dict[str, _EstimatorProfile]:
             default_dgp=generate_did_data,
             dgp_kwargs_builder=_basic_dgp_kwargs,
             fit_kwargs_builder=_basic_fit_kwargs,
+            result_extractor=_extract_simple,
+            min_n=20,
+        ),
+        "TwoWayFixedEffects": _EstimatorProfile(
+            default_dgp=generate_did_data,
+            dgp_kwargs_builder=_basic_dgp_kwargs,
+            fit_kwargs_builder=_twfe_fit_kwargs,
             result_extractor=_extract_simple,
             min_n=20,
         ),
@@ -1303,7 +1319,9 @@ def simulate_power(
     if profile is None and data_generator is None:
         raise ValueError(
             f"Estimator '{estimator_name}' not in registry. "
-            f"Provide a custom data_generator and estimator_kwargs."
+            f"Provide a custom data_generator and estimator_kwargs "
+            f"(the full dict of keyword arguments for estimator.fit(), "
+            f"e.g. dict(outcome='y', treatment='treat', time='period'))."
         )
 
     # When a custom data_generator is provided, bypass registry DGP
@@ -1414,8 +1432,7 @@ def simulate_power(
                         )
                         fit_kwargs.update(est_kwargs)
                     else:
-                        fit_kwargs = dict(outcome="outcome", treatment="treated", time="post")
-                        fit_kwargs.update(est_kwargs)
+                        fit_kwargs = dict(est_kwargs)
 
                 result = estimator.fit(data, **fit_kwargs)
 
