@@ -1275,13 +1275,15 @@ Optimization (Equation 2):
 ```
 (α̂, β̂, L̂) = argmin_{α,β,L} Σ_j Σ_s θ_s^{i,t} ω_j^{i,t} (1-W_js)(Y_js - α_j - β_s - L_js)² + λ_nn ||L||_*
 ```
-Solved via alternating minimization. For α, β (or μ, α, β, τ in global): weighted least
-squares (closed form). For L: proximal gradient with step size η = 1/(2·max(W)):
+Solved via alternating minimization. For α, β: weighted least squares (closed form).
+The global solver adds an intercept μ and solves for (μ, α, β, L) on control data only,
+extracting τ_it post-hoc as residuals (see Global section below).
+For L: proximal gradient with step size η = 1/(2·max(W)):
 ```
 Gradient step: G = L + (W/max(W)) ⊙ (R - L)
 Proximal step: L = U × soft_threshold(Σ, η·λ_nn) × V'  (SVD of G = UΣV')
 ```
-where R is the residual after removing fixed effects (and τ·D in global mode).
+where R is the residual after removing fixed effects.
 Both the local and global solvers use FISTA/Nesterov acceleration for the
 inner L update (O(1/k²) convergence rate, up to 20 inner iterations per
 outer alternating step).
