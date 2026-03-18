@@ -933,8 +933,9 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 | `p_value` | `float` | P-value |
 | `conf_int` | `tuple[float, float]` | CI |
 | `n_obs` | `int` | Number of observations |
-| `n_treated` | `int` | Number of treated observations |
-| `n_control` | `int` | Number of control observations |
+| `n_treated` | `int` | Number of treated units |
+| `n_control` | `int` | Number of control units |
+| `n_treated_obs` | `int` | Number of treated unit-time observations |
 | `lambda_time` | `float` | Selected time decay parameter |
 | `lambda_unit` | `float` | Selected unit decay parameter |
 | `lambda_nn` | `float` | Selected nuclear norm parameter |
