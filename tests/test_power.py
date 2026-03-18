@@ -5,16 +5,50 @@ import pandas as pd
 import pytest
 
 from diff_diff import (
+    TROP,
+    CallawaySantAnna,
+    ContinuousDiD,
     DifferenceInDifferences,
+    EfficientDiD,
+    ImputationDiD,
+    MultiPeriodDiD,
     PowerAnalysis,
     PowerResults,
+    SimulationMDEResults,
     SimulationPowerResults,
+    SimulationSampleSizeResults,
+    StackedDiD,
+    SunAbraham,
+    SyntheticDiD,
+    TripleDifference,
+    TwoStageDiD,
+    TwoWayFixedEffects,
     compute_mde,
     compute_power,
     compute_sample_size,
+    simulate_mde,
     simulate_power,
+    simulate_sample_size,
 )
-from diff_diff.power import MAX_SAMPLE_SIZE
+from diff_diff.power import (
+    MAX_SAMPLE_SIZE,
+    _basic_dgp_kwargs,
+    _basic_fit_kwargs,
+    _continuous_dgp_kwargs,
+    _continuous_fit_kwargs,
+    _ddd_dgp_kwargs,
+    _ddd_fit_kwargs,
+    _extract_continuous,
+    _extract_multiperiod,
+    _extract_simple,
+    _extract_staggered,
+    _factor_dgp_kwargs,
+    _get_registry,
+    _staggered_dgp_kwargs,
+    _staggered_fit_kwargs,
+    _trop_fit_kwargs,
+    _twfe_fit_kwargs,
+)
 
 
 class TestPowerAnalysis:
@@ -80,12 +114,7 @@ class TestPowerAnalysis:
     def test_power_calculation(self):
         """Test power calculation."""
         pa = PowerAnalysis(alpha=0.05)
-        result = pa.power(
-            effect_size=0.5,
-            n_treated=50,
-            n_control=50,
-            sigma=1.0
-        )
+        result = pa.power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0)
 
         assert isinstance(result, PowerResults)
         assert 0 < result.power < 1
@@ -95,12 +124,8 @@ class TestPowerAnalysis:
         """Test that power increases with effect size."""
         pa = PowerAnalysis()
 
-        result_small = pa.power(
-            effect_size=0.2, n_treated=50, n_control=50, sigma=1.0
-        )
-        result_large = pa.power(
-            effect_size=0.8, n_treated=50, n_control=50, sigma=1.0
-        )
+        result_small = pa.power(effect_size=0.2, n_treated=50, n_control=50, sigma=1.0)
+        result_large = pa.power(effect_size=0.8, n_treated=50, n_control=50, sigma=1.0)
 
         assert result_large.power > result_small.power
 
@@ -108,12 +133,8 @@ class TestPowerAnalysis:
         """Test that power increases with sample size."""
         pa = PowerAnalysis()
 
-        result_small = pa.power(
-            effect_size=0.5, n_treated=25, n_control=25, sigma=1.0
-        )
-        result_large = pa.power(
-            effect_size=0.5, n_treated=100, n_control=100, sigma=1.0
-        )
+        result_small = pa.power(effect_size=0.5, n_treated=25, n_control=25, sigma=1.0)
+        result_large = pa.power(effect_size=0.5, n_treated=100, n_control=100, sigma=1.0)
 
         assert result_large.power > result_small.power
 
@@ -140,14 +161,8 @@ class TestPowerAnalysis:
         pa = PowerAnalysis(power=0.80)
 
         # Panel with multiple periods should have smaller MDE
-        result_2period = pa.mde(
-            n_treated=50, n_control=50, sigma=1.0,
-            n_pre=1, n_post=1
-        )
-        result_6period = pa.mde(
-            n_treated=50, n_control=50, sigma=1.0,
-            n_pre=3, n_post=3
-        )
+        result_2period = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=1, n_post=1)
+        result_6period = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=3, n_post=3)
 
         # More periods should reduce MDE (more data)
         assert result_6period.mde < result_2period.mde
@@ -157,14 +172,8 @@ class TestPowerAnalysis:
         """Test that intra-cluster correlation affects power."""
         pa = PowerAnalysis(power=0.80)
 
-        result_no_icc = pa.mde(
-            n_treated=50, n_control=50, sigma=1.0,
-            n_pre=3, n_post=3, rho=0.0
-        )
-        result_with_icc = pa.mde(
-            n_treated=50, n_control=50, sigma=1.0,
-            n_pre=3, n_post=3, rho=0.5
-        )
+        result_no_icc = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=3, n_post=3, rho=0.0)
+        result_with_icc = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=3, n_post=3, rho=0.5)
 
         # Higher ICC should increase MDE (less independent information)
         assert result_with_icc.mde > result_no_icc.mde
@@ -173,8 +182,7 @@ class TestPowerAnalysis:
         """Test power curve generation."""
         pa = PowerAnalysis()
         curve = pa.power_curve(
-            n_treated=50, n_control=50, sigma=1.0,
-            effect_sizes=[0.1, 0.2, 0.3, 0.5, 0.7, 1.0]
+            n_treated=50, n_control=50, sigma=1.0, effect_sizes=[0.1, 0.2, 0.3, 0.5, 0.7, 1.0]
         )
 
         assert isinstance(curve, pd.DataFrame)
@@ -196,8 +204,7 @@ class TestPowerAnalysis:
         """Test sample size curve generation."""
         pa = PowerAnalysis()
         curve = pa.sample_size_curve(
-            effect_size=0.5, sigma=1.0,
-            sample_sizes=[20, 50, 100, 150, 200]
+            effect_size=0.5, sigma=1.0, sample_sizes=[20, 50, 100, 150, 200]
         )
 
         assert isinstance(curve, pd.DataFrame)
@@ -258,22 +265,14 @@ class TestPowerAnalysis:
         pa_two = PowerAnalysis(alternative="two-sided")
 
         # For positive effect, 'greater' should have higher power than two-sided
-        result_greater = pa_greater.power(
-            effect_size=0.5, n_treated=50, n_control=50, sigma=1.0
-        )
-        result_two = pa_two.power(
-            effect_size=0.5, n_treated=50, n_control=50, sigma=1.0
-        )
+        result_greater = pa_greater.power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0)
+        result_two = pa_two.power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0)
 
         assert result_greater.power > result_two.power
 
         # For negative effect, 'less' should have higher power
-        result_less = pa_less.power(
-            effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0
-        )
-        result_two_neg = pa_two.power(
-            effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0
-        )
+        result_less = pa_less.power(effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0)
+        result_two_neg = pa_two.power(effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0)
 
         assert result_less.power > result_two_neg.power
 
@@ -282,12 +281,8 @@ class TestPowerAnalysis:
         pa = PowerAnalysis()
 
         # Power should work the same for negative effects (symmetric)
-        result_pos = pa.power(
-            effect_size=0.5, n_treated=50, n_control=50, sigma=1.0
-        )
-        result_neg = pa.power(
-            effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0
-        )
+        result_pos = pa.power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0)
+        result_neg = pa.power(effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0)
 
         # Two-sided test should have same power for positive and negative effects
         assert abs(result_pos.power - result_neg.power) < 0.01
@@ -297,20 +292,14 @@ class TestPowerAnalysis:
         pa = PowerAnalysis(power=0.80)
 
         # Test with very high ICC (0.99)
-        result_extreme = pa.mde(
-            n_treated=50, n_control=50, sigma=1.0,
-            n_pre=5, n_post=5, rho=0.99
-        )
+        result_extreme = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=5, n_post=5, rho=0.99)
 
-        result_moderate = pa.mde(
-            n_treated=50, n_control=50, sigma=1.0,
-            n_pre=5, n_post=5, rho=0.5
-        )
+        result_moderate = pa.mde(n_treated=50, n_control=50, sigma=1.0, n_pre=5, n_post=5, rho=0.5)
 
         # Extreme ICC should have higher MDE (less independent info)
         assert result_extreme.mde > result_moderate.mde
         # MDE should still be finite and reasonable
-        assert result_extreme.mde < float('inf')
+        assert result_extreme.mde < float("inf")
         assert result_extreme.mde > 0
 
 
@@ -326,12 +315,7 @@ class TestConvenienceFunctions:
 
     def test_compute_power(self):
         """Test compute_power convenience function."""
-        power = compute_power(
-            effect_size=0.5,
-            n_treated=50,
-            n_control=50,
-            sigma=1.0
-        )
+        power = compute_power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0)
 
         assert isinstance(power, float)
         assert 0 < power < 1
@@ -353,12 +337,8 @@ class TestConvenienceFunctions:
         assert mde_class == mde_func
 
         # Power
-        power_class = pa.power(
-            effect_size=0.5, n_treated=50, n_control=50, sigma=1.0
-        ).power
-        power_func = compute_power(
-            effect_size=0.5, n_treated=50, n_control=50, sigma=1.0
-        )
+        power_class = pa.power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0).power
+        power_func = compute_power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0)
         assert power_class == power_func
 
         # Sample size
@@ -563,13 +543,16 @@ class TestSimulatePower:
                 return Result()
 
         # Test with low failure rate (should not warn)
+        from diff_diff.prep import generate_did_data
+
         estimator = FailingEstimator(fail_rate=0.0)
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            results = simulate_power(
+            simulate_power(
                 estimator=estimator,
                 n_simulations=10,
                 progress=False,
+                data_generator=generate_did_data,
             )
             # Should have completed successfully without warning
             assert len([x for x in w if "simulations" in str(x.message)]) == 0
@@ -583,10 +566,12 @@ class TestVisualization:
         pytest.importorskip("matplotlib")
         from diff_diff.visualization import plot_power_curve
 
-        df = pd.DataFrame({
-            "effect_size": [0.1, 0.2, 0.3, 0.5, 0.7, 1.0],
-            "power": [0.1, 0.2, 0.4, 0.7, 0.9, 0.99]
-        })
+        df = pd.DataFrame(
+            {
+                "effect_size": [0.1, 0.2, 0.3, 0.5, 0.7, 1.0],
+                "power": [0.1, 0.2, 0.4, 0.7, 0.9, 0.99],
+            }
+        )
 
         ax = plot_power_curve(df, show=False)
         assert ax is not None
@@ -597,10 +582,7 @@ class TestVisualization:
         from diff_diff.visualization import plot_power_curve
 
         ax = plot_power_curve(
-            effect_sizes=[0.1, 0.2, 0.3, 0.5],
-            powers=[0.1, 0.3, 0.6, 0.9],
-            mde=0.25,
-            show=False
+            effect_sizes=[0.1, 0.2, 0.3, 0.5], powers=[0.1, 0.3, 0.6, 0.9], mde=0.25, show=False
         )
         assert ax is not None
 
@@ -609,10 +591,9 @@ class TestVisualization:
         pytest.importorskip("matplotlib")
         from diff_diff.visualization import plot_power_curve
 
-        df = pd.DataFrame({
-            "sample_size": [20, 50, 100, 150, 200],
-            "power": [0.2, 0.5, 0.8, 0.9, 0.95]
-        })
+        df = pd.DataFrame(
+            {"sample_size": [20, 50, 100, 150, 200], "power": [0.2, 0.5, 0.8, 0.9, 0.95]}
+        )
 
         ax = plot_power_curve(df, show=False)
         assert ax is not None
@@ -626,10 +607,7 @@ class TestVisualization:
             plot_power_curve(show=False)  # No data provided
 
         with pytest.raises(ValueError):
-            plot_power_curve(
-                effect_sizes=[1, 2, 3],
-                show=False  # Missing powers
-            )
+            plot_power_curve(effect_sizes=[1, 2, 3], show=False)  # Missing powers
 
 
 class TestEdgeCases:
@@ -648,15 +626,11 @@ class TestEdgeCases:
         pa = PowerAnalysis()
 
         # Zero effect should give ~alpha power
-        result_zero = pa.power(
-            effect_size=0.0, n_treated=50, n_control=50, sigma=1.0
-        )
+        result_zero = pa.power(effect_size=0.0, n_treated=50, n_control=50, sigma=1.0)
         assert result_zero.power < 0.10
 
         # Huge effect should give ~1.0 power
-        result_huge = pa.power(
-            effect_size=100.0, n_treated=50, n_control=50, sigma=1.0
-        )
+        result_huge = pa.power(effect_size=100.0, n_treated=50, n_control=50, sigma=1.0)
         assert result_huge.power > 0.99
 
     def test_unbalanced_design(self):
@@ -689,3 +663,529 @@ class TestEdgeCases:
 
         # Verify constant is the expected value
         assert MAX_SAMPLE_SIZE == 2**31 - 1
+
+
+# ---------------------------------------------------------------------------
+# Registry tests
+# ---------------------------------------------------------------------------
+
+
+class TestEstimatorRegistry:
+    """Tests for the estimator registry."""
+
+    EXPECTED_ESTIMATORS = [
+        "DifferenceInDifferences",
+        "TwoWayFixedEffects",
+        "MultiPeriodDiD",
+        "CallawaySantAnna",
+        "SunAbraham",
+        "ImputationDiD",
+        "TwoStageDiD",
+        "StackedDiD",
+        "EfficientDiD",
+        "TROP",
+        "SyntheticDiD",
+        "TripleDifference",
+        "ContinuousDiD",
+    ]
+
+    def test_all_estimators_registered(self):
+        """Every supported estimator has a registry entry."""
+        registry = _get_registry()
+        for name in self.EXPECTED_ESTIMATORS:
+            assert name in registry, f"{name} missing from registry"
+
+    def test_bacon_excluded(self):
+        """BaconDecomposition is diagnostic-only and should not be in registry."""
+        registry = _get_registry()
+        assert "BaconDecomposition" not in registry
+
+    def test_dgp_kwargs_builders_return_dicts(self):
+        """Each DGP kwargs builder returns a non-empty dict."""
+        params = dict(
+            n_units=50,
+            n_periods=4,
+            treatment_effect=5.0,
+            treatment_fraction=0.5,
+            treatment_period=2,
+            sigma=1.0,
+        )
+        for builder in [
+            _basic_dgp_kwargs,
+            _staggered_dgp_kwargs,
+            _factor_dgp_kwargs,
+            _ddd_dgp_kwargs,
+            _continuous_dgp_kwargs,
+        ]:
+            result = builder(**params)
+            assert isinstance(result, dict)
+            assert len(result) > 0
+
+    def test_fit_kwargs_builders_return_dicts(self):
+        """Each fit kwargs builder returns a dict with 'outcome'."""
+        dummy_df = pd.DataFrame({"period": [0, 1, 2, 3]})
+        for builder in [
+            _basic_fit_kwargs,
+            _twfe_fit_kwargs,
+            _staggered_fit_kwargs,
+            _ddd_fit_kwargs,
+            _trop_fit_kwargs,
+            _continuous_fit_kwargs,
+        ]:
+            result = builder(dummy_df, 50, 4, 2)
+            assert isinstance(result, dict)
+            assert "outcome" in result
+
+    def test_extract_simple(self):
+        """_extract_simple extracts from .att/.se/.p_value/.conf_int."""
+
+        class MockResult:
+            att = 3.0
+            se = 0.5
+            p_value = 0.01
+            conf_int = (2.0, 4.0)
+
+        att, se, p, ci = _extract_simple(MockResult())
+        assert att == 3.0
+        assert se == 0.5
+        assert p == 0.01
+        assert ci == (2.0, 4.0)
+
+    def test_extract_multiperiod(self):
+        """_extract_multiperiod extracts from avg_* attributes."""
+
+        class MockResult:
+            avg_att = 4.0
+            avg_se = 0.6
+            avg_p_value = 0.001
+            avg_conf_int = (2.8, 5.2)
+
+        att, se, p, ci = _extract_multiperiod(MockResult())
+        assert att == 4.0
+        assert se == 0.6
+        assert p == 0.001
+        assert ci == (2.8, 5.2)
+
+    def test_extract_staggered_analytical(self):
+        """_extract_staggered handles analytical result objects."""
+
+        class MockResult:
+            overall_att = 2.0
+            overall_se = 0.3
+            overall_p_value = 0.02
+            overall_conf_int = (1.4, 2.6)
+
+        att, se, p, ci = _extract_staggered(MockResult())
+        assert att == 2.0
+        assert se == 0.3
+        assert p == 0.02
+        assert ci == (1.4, 2.6)
+
+    def test_extract_staggered_bootstrap_fallback(self):
+        """_extract_staggered falls back to bootstrap attribute names."""
+
+        class MockBootstrapResult:
+            overall_att = 2.0
+            overall_att_se = 0.4
+            overall_att_p_value = 0.03
+            overall_att_ci = (1.2, 2.8)
+
+        att, se, p, ci = _extract_staggered(MockBootstrapResult())
+        assert att == 2.0
+        assert se == 0.4
+        assert p == 0.03
+        assert ci == (1.2, 2.8)
+
+    def test_extract_continuous(self):
+        """_extract_continuous extracts from overall_att_* attributes."""
+
+        class MockResult:
+            overall_att = 1.5
+            overall_att_se = 0.2
+            overall_att_p_value = 0.005
+            overall_att_conf_int = (1.1, 1.9)
+
+        att, se, p, ci = _extract_continuous(MockResult())
+        assert att == 1.5
+        assert se == 0.2
+        assert p == 0.005
+        assert ci == (1.1, 1.9)
+
+    def test_unknown_estimator_raises_without_data_generator(self):
+        """Unknown estimator without data_generator raises ValueError."""
+
+        class UnknownEstimator:
+            pass
+
+        with pytest.raises(ValueError, match="not in registry"):
+            simulate_power(
+                UnknownEstimator(),
+                n_simulations=5,
+                progress=False,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Estimator coverage tests for simulate_power
+# ---------------------------------------------------------------------------
+
+
+class TestEstimatorCoverage:
+    """Verify simulate_power works for each registered estimator."""
+
+    def _assert_valid_result(self, result, expected_name):
+        assert 0 <= result.power <= 1
+        assert result.estimator_name == expected_name
+        assert np.isfinite(result.mean_estimate)
+        assert result.n_simulations > 0
+        assert result.coverage >= 0
+
+    def test_did(self):
+        result = simulate_power(
+            DifferenceInDifferences(),
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "DifferenceInDifferences")
+
+    def test_twfe(self):
+        result = simulate_power(
+            TwoWayFixedEffects(),
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "TwoWayFixedEffects")
+
+    def test_multiperiod(self):
+        result = simulate_power(
+            MultiPeriodDiD(),
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "MultiPeriodDiD")
+
+    def test_callaway_santanna(self):
+        result = simulate_power(
+            CallawaySantAnna(),
+            n_units=60,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "CallawaySantAnna")
+
+    def test_sun_abraham(self):
+        result = simulate_power(
+            SunAbraham(),
+            n_units=60,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "SunAbraham")
+
+    def test_imputation_did(self):
+        result = simulate_power(
+            ImputationDiD(),
+            n_units=60,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "ImputationDiD")
+
+    def test_two_stage_did(self):
+        result = simulate_power(
+            TwoStageDiD(),
+            n_units=60,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "TwoStageDiD")
+
+    def test_stacked_did(self):
+        result = simulate_power(
+            StackedDiD(),
+            n_units=60,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "StackedDiD")
+
+    def test_efficient_did(self):
+        result = simulate_power(
+            EfficientDiD(),
+            n_units=60,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "EfficientDiD")
+
+    def test_triple_difference(self):
+        result = simulate_power(
+            TripleDifference(),
+            n_units=80,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "TripleDifference")
+
+    @pytest.mark.slow
+    def test_trop(self):
+        result = simulate_power(
+            TROP(),
+            n_units=50,
+            n_periods=6,
+            treatment_period=3,
+            treatment_fraction=0.3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "TROP")
+
+    @pytest.mark.slow
+    def test_synthetic_did(self):
+        result = simulate_power(
+            SyntheticDiD(),
+            n_units=50,
+            n_periods=6,
+            treatment_period=3,
+            treatment_fraction=0.3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "SyntheticDiD")
+
+    def test_continuous_did(self):
+        result = simulate_power(
+            ContinuousDiD(),
+            n_units=100,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        self._assert_valid_result(result, "ContinuousDiD")
+
+
+# ---------------------------------------------------------------------------
+# simulate_mde tests
+# ---------------------------------------------------------------------------
+
+
+class TestSimulateMDE:
+    """Tests for simulate_mde function."""
+
+    def test_basic_mde(self):
+        """MDE found for DiD, power at MDE close to target."""
+        result = simulate_mde(
+            DifferenceInDifferences(),
+            n_units=100,
+            sigma=1.0,
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationMDEResults)
+        assert result.mde > 0
+        assert result.power_at_mde >= result.target_power - 0.10
+
+    def test_result_methods(self):
+        """summary(), to_dict(), to_dataframe() work."""
+        result = simulate_mde(
+            DifferenceInDifferences(),
+            n_simulations=30,
+            seed=42,
+            progress=False,
+        )
+        summary = result.summary()
+        assert "MDE" in summary or "Minimum" in summary
+
+        d = result.to_dict()
+        assert "mde" in d
+        assert "estimator_name" in d
+
+        df = result.to_dataframe()
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 1
+
+    def test_monotonicity_in_search_path(self):
+        """The search path records plausible effect_size / power pairs."""
+        result = simulate_mde(
+            DifferenceInDifferences(),
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        assert len(result.search_path) > 0
+        for step in result.search_path:
+            assert "effect_size" in step
+            assert "power" in step
+            assert 0 <= step["power"] <= 1
+
+    def test_convergence_within_max_steps(self):
+        """Search terminates within max_steps."""
+        result = simulate_mde(
+            DifferenceInDifferences(),
+            n_simulations=30,
+            max_steps=10,
+            seed=42,
+            progress=False,
+        )
+        # n_steps includes bracketing steps + bisection
+        assert result.n_steps <= 25  # generous bound
+
+    def test_custom_data_generator(self):
+        """Works with user-provided DGP."""
+        from diff_diff.prep import generate_did_data
+
+        result = simulate_mde(
+            DifferenceInDifferences(),
+            n_simulations=30,
+            seed=42,
+            progress=False,
+            data_generator=generate_did_data,
+        )
+        assert result.mde > 0
+
+    def test_small_sigma_gives_small_mde(self):
+        """Small noise → small MDE."""
+        result = simulate_mde(
+            DifferenceInDifferences(),
+            n_units=100,
+            sigma=0.1,
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        assert result.mde < 1.0
+
+    def test_large_sigma_gives_large_mde(self):
+        """Large noise → large MDE."""
+        result = simulate_mde(
+            DifferenceInDifferences(),
+            n_units=50,
+            sigma=10.0,
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        assert result.mde > 1.0
+
+
+# ---------------------------------------------------------------------------
+# simulate_sample_size tests
+# ---------------------------------------------------------------------------
+
+
+class TestSimulateSampleSize:
+    """Tests for simulate_sample_size function."""
+
+    def test_basic_sample_size(self):
+        """Required N found for DiD, power at N close to target."""
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=5.0,
+            sigma=1.0,
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationSampleSizeResults)
+        assert result.required_n > 0
+        assert result.power_at_n >= result.target_power - 0.10
+
+    def test_result_methods(self):
+        """summary(), to_dict(), to_dataframe() work."""
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=5.0,
+            n_simulations=30,
+            seed=42,
+            progress=False,
+        )
+        summary = result.summary()
+        assert "Sample Size" in summary or "Required" in summary
+
+        d = result.to_dict()
+        assert "required_n" in d
+        assert "estimator_name" in d
+
+        df = result.to_dataframe()
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 1
+
+    def test_monotonicity_in_search_path(self):
+        """The search path records plausible n_units / power pairs."""
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=5.0,
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        assert len(result.search_path) > 0
+        for step in result.search_path:
+            assert "n_units" in step
+            assert "power" in step
+            assert 0 <= step["power"] <= 1
+
+    def test_custom_data_generator(self):
+        """Works with user-provided DGP."""
+        from diff_diff.prep import generate_did_data
+
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=5.0,
+            n_simulations=30,
+            seed=42,
+            progress=False,
+            data_generator=generate_did_data,
+        )
+        assert result.required_n > 0
+
+    def test_large_effect_gives_small_n(self):
+        """Large effect → small N."""
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=20.0,
+            sigma=1.0,
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        assert result.required_n <= 100
+
+    def test_small_effect_gives_large_n(self):
+        """Small effect → large N."""
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=0.5,
+            sigma=5.0,
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        assert result.required_n >= 50
