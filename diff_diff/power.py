@@ -136,15 +136,6 @@ def _basic_fit_kwargs(
     return dict(outcome="outcome", treatment="treated", time="post")
 
 
-def _twfe_fit_kwargs(
-    data: pd.DataFrame,
-    n_units: int,
-    n_periods: int,
-    treatment_period: int,
-) -> Dict[str, Any]:
-    return dict(outcome="outcome", treatment="treated", time="period", unit="unit")
-
-
 def _multiperiod_fit_kwargs(
     data: pd.DataFrame,
     n_units: int,
@@ -261,13 +252,6 @@ def _get_registry() -> Dict[str, _EstimatorProfile]:
             default_dgp=generate_did_data,
             dgp_kwargs_builder=_basic_dgp_kwargs,
             fit_kwargs_builder=_basic_fit_kwargs,
-            result_extractor=_extract_simple,
-            min_n=20,
-        ),
-        "TwoWayFixedEffects": _EstimatorProfile(
-            default_dgp=generate_did_data,
-            dgp_kwargs_builder=_basic_dgp_kwargs,
-            fit_kwargs_builder=_twfe_fit_kwargs,
             result_extractor=_extract_simple,
             min_n=20,
         ),
@@ -1221,7 +1205,7 @@ def simulate_power(
 
     This function simulates datasets with known treatment effects and estimates
     power as the fraction of simulations where the null hypothesis is rejected.
-    All built-in estimators are supported via an internal registry that selects
+    Most built-in estimators are supported via an internal registry that selects
     the appropriate data-generating process and fit signature automatically.
 
     Parameters
@@ -1987,7 +1971,24 @@ def simulate_sample_size(
     # --- Bracket ---
     if n_range is not None:
         lo, hi = n_range
-        _power_at_n(lo)  # evaluate lo to populate search_path
+        power_lo = _power_at_n(lo)
+        if power_lo >= power:
+            warnings.warn(
+                f"Power at n={lo} is {power_lo:.2f} >= target {power}. "
+                f"Lower bound already achieves target power. Returning lo.",
+                UserWarning,
+            )
+            return SimulationSampleSizeResults(
+                required_n=lo,
+                power_at_n=power_lo,
+                target_power=power,
+                alpha=alpha,
+                effect_size=treatment_effect,
+                n_simulations_per_step=n_simulations,
+                n_steps=len(search_path),
+                search_path=search_path,
+                estimator_name=estimator_name,
+            )
         power_hi = _power_at_n(hi)
         if power_hi < power:
             warnings.warn(
@@ -1997,6 +1998,19 @@ def simulate_sample_size(
             )
     else:
         lo = min_n
+        power_lo = _power_at_n(lo)
+        if power_lo >= power:
+            return SimulationSampleSizeResults(
+                required_n=lo,
+                power_at_n=power_lo,
+                target_power=power,
+                alpha=alpha,
+                effect_size=treatment_effect,
+                n_simulations_per_step=n_simulations,
+                n_steps=len(search_path),
+                search_path=search_path,
+                estimator_name=estimator_name,
+            )
         hi = max(100, 2 * min_n)
         for _ in range(10):
             if _power_at_n(hi) >= power:

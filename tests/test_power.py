@@ -43,7 +43,6 @@ from diff_diff.power import (
     _staggered_dgp_kwargs,
     _staggered_fit_kwargs,
     _trop_fit_kwargs,
-    _twfe_fit_kwargs,
 )
 
 
@@ -671,7 +670,6 @@ class TestEstimatorRegistry:
 
     EXPECTED_ESTIMATORS = [
         "DifferenceInDifferences",
-        "TwoWayFixedEffects",
         "MultiPeriodDiD",
         "CallawaySantAnna",
         "SunAbraham",
@@ -720,7 +718,6 @@ class TestEstimatorRegistry:
         dummy_df = pd.DataFrame({"period": [0, 1, 2, 3]})
         for builder in [
             _basic_fit_kwargs,
-            _twfe_fit_kwargs,
             _staggered_fit_kwargs,
             _ddd_fit_kwargs,
             _trop_fit_kwargs,
@@ -803,6 +800,18 @@ class TestEstimatorRegistry:
                 progress=False,
             )
 
+    def test_twfe_not_in_registry(self):
+        """TwoWayFixedEffects is not in registry and raises without custom data_generator."""
+        registry = _get_registry()
+        assert "TwoWayFixedEffects" not in registry
+
+        with pytest.raises(ValueError, match="not in registry"):
+            simulate_power(
+                TwoWayFixedEffects(),
+                n_simulations=5,
+                progress=False,
+            )
+
     def test_unknown_estimator_raises_without_data_generator(self):
         """Unknown estimator without data_generator raises ValueError."""
 
@@ -840,15 +849,6 @@ class TestEstimatorCoverage:
             progress=False,
         )
         self._assert_valid_result(result, "DifferenceInDifferences")
-
-    def test_twfe(self):
-        result = simulate_power(
-            TwoWayFixedEffects(),
-            n_simulations=10,
-            seed=42,
-            progress=False,
-        )
-        self._assert_valid_result(result, "TwoWayFixedEffects")
 
     def test_multiperiod(self):
         result = simulate_power(
@@ -1225,3 +1225,32 @@ class TestSimulateSampleSize:
                 seed=42,
                 progress=False,
             )
+
+    def test_lo_already_sufficient_explicit(self):
+        """When lo already meets power, return lo immediately with warning."""
+        with pytest.warns(UserWarning, match="Lower bound already achieves"):
+            result = simulate_sample_size(
+                DifferenceInDifferences(),
+                treatment_effect=50.0,
+                sigma=0.1,
+                n_simulations=50,
+                n_range=(20, 200),
+                seed=42,
+                progress=False,
+            )
+        assert result.required_n == 20
+        assert result.power_at_n >= 0.80
+
+    def test_lo_already_sufficient_auto(self):
+        """Auto-bracket returns min_n when effect overwhelmingly large."""
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=50.0,
+            sigma=0.1,
+            n_simulations=50,
+            seed=42,
+            progress=False,
+        )
+        # min_n for DifferenceInDifferences is 20
+        assert result.required_n == 20
+        assert result.power_at_n >= 0.80
