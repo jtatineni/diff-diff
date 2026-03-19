@@ -44,53 +44,70 @@ For development:
 Quick Links
 -----------
 
-- :doc:`api/index` - Full API reference
-- :doc:`quickstart` - Get started with basic examples
+- :doc:`quickstart` - Installation and your first DiD analysis
 - :doc:`choosing_estimator` - Which estimator should I use?
+- :doc:`tutorials/01_basic_did` - Hands-on basic tutorial
 - :doc:`troubleshooting` - Common issues and solutions
-- :doc:`r_comparison` - Comparison with R packages
-- :doc:`python_comparison` - Comparison with Python packages
-- :doc:`benchmarks` - Validation benchmarks vs R
+- :doc:`r_comparison` - Coming from R?
+- :doc:`api/index` - Full API reference
 
 .. toctree::
    :maxdepth: 2
-   :caption: API
-   :hidden:
-
-   api/index
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Guide
+   :caption: Getting Started
    :hidden:
 
    quickstart
    choosing_estimator
    troubleshooting
-   r_comparison
-   python_comparison
-   benchmarks
 
 .. toctree::
    :maxdepth: 1
-   :caption: Tutorials
+   :caption: Tutorials: Fundamentals
    :hidden:
 
    tutorials/01_basic_did
    tutorials/02_staggered_did
    tutorials/03_synthetic_did
-   tutorials/04_parallel_trends
-   tutorials/05_honest_did
-   tutorials/06_power_analysis
-   tutorials/07_pretrends_power
    tutorials/08_triple_diff
    tutorials/09_real_world_examples
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Tutorials: Advanced Methods
+   :hidden:
+
    tutorials/10_trop
    tutorials/11_imputation_did
    tutorials/12_two_stage_did
    tutorials/13_stacked_did
    tutorials/14_continuous_did
    tutorials/15_efficient_did
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Tutorials: Study Design
+   :hidden:
+
+   tutorials/04_parallel_trends
+   tutorials/05_honest_did
+   tutorials/06_power_analysis
+   tutorials/07_pretrends_power
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Comparisons & Benchmarks
+   :hidden:
+
+   r_comparison
+   python_comparison
+   benchmarks
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference
+   :hidden:
+
+   api/index
 
 What is Difference-in-Differences?
 ----------------------------------

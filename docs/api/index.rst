@@ -214,7 +214,8 @@ Built-in datasets for examples and testing:
 Module Documentation
 --------------------
 
-Detailed documentation by module:
+Estimators
+~~~~~~~~~~
 
 .. toctree::
    :maxdepth: 2
@@ -229,12 +230,33 @@ Detailed documentation by module:
    efficient_did
    two_stage
    bacon
-   results
-   visualization
+
+Diagnostics & Inference
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
    diagnostics
    honest_did
    power
    pretrends
+
+Results & Visualization
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
+   results
+   visualization
+
+Data & Utilities
+~~~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
    utils
    prep
    datasets
