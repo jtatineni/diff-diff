@@ -12,13 +12,21 @@ diff-diff offers 14 estimators covering basic 2x2 DiD, modern staggered adoption
 
 ## Documentation
 
-- [Quickstart](https://diff-diff.readthedocs.io/en/stable/quickstart.html): Get started with basic examples — column-name and formula interfaces, covariates, fixed effects, cluster-robust SEs
+### Getting Started
+
+- [Quickstart](https://diff-diff.readthedocs.io/en/stable/quickstart.html): Installation, basic 2x2 DiD — column-name and formula interfaces, covariates, fixed effects, cluster-robust SEs
 - [Choosing an Estimator](https://diff-diff.readthedocs.io/en/stable/choosing_estimator.html): Decision flowchart for selecting the right estimator for your research design
-- [API Reference](https://diff-diff.readthedocs.io/en/stable/api/index.html): Full API documentation for all estimators, results classes, diagnostics, and utilities
+- [Troubleshooting](https://diff-diff.readthedocs.io/en/stable/troubleshooting.html): Common issues and solutions
+
+### Comparisons & Benchmarks
+
 - [R Comparison](https://diff-diff.readthedocs.io/en/stable/r_comparison.html): Side-by-side comparison with R packages (did, fixest, synthdid, didimputation, did2s, stackedev)
 - [Python Comparison](https://diff-diff.readthedocs.io/en/stable/python_comparison.html): Comparison with Python DiD packages
 - [Benchmarks](https://diff-diff.readthedocs.io/en/stable/benchmarks.html): Validation results and performance benchmarks vs R
-- [Troubleshooting](https://diff-diff.readthedocs.io/en/stable/troubleshooting.html): Common issues and solutions
+
+### API Reference
+
+- [API Reference](https://diff-diff.readthedocs.io/en/stable/api/index.html): Full API documentation for all estimators, results classes, diagnostics, and utilities
 
 ## Estimators
 

@@ -91,7 +91,7 @@ html_theme_options = {
         },
     ],
     "navbar_end": ["theme-switcher", "navbar-icon-links"],
-    "navigation_depth": 4,
+    "navigation_depth": 3,
     "show_toc_level": 2,
 }
 
@@ -107,6 +107,20 @@ ogp_social_cards = {
 
 # -- Options for nbsphinx ---------------------------------------------------
 nbsphinx_execute = "never"
+nbsphinx_prolog = r"""
+{% set docname = env.doc2path(env.docname, base=None) %}
+
+.. raw:: html
+
+    <div class="admonition note">
+    <p class="admonition-title">Interactive notebook</p>
+    <p>
+    This tutorial is a Jupyter notebook. You can
+    <a href="https://github.com/igerber/diff-diff/blob/main/docs/{{ docname }}">view it on GitHub</a>
+    or download it to run locally.
+    </p>
+    </div>
+"""
 
 # -- Options for intersphinx -------------------------------------------------
 intersphinx_mapping = {
