@@ -1825,8 +1825,8 @@ class TestSimulateSampleSize:
         assert result.power_at_n >= 0.80
 
     def test_lo_already_sufficient_auto(self):
-        """Auto-bracket warns and returns min_n when effect overwhelmingly large."""
-        with pytest.warns(UserWarning, match="registry floor"):
+        """Auto-bracket searches downward when floor already achieves power."""
+        with pytest.warns(UserWarning, match="Could not find a smaller N"):
             result = simulate_sample_size(
                 DifferenceInDifferences(),
                 treatment_effect=50.0,
@@ -1835,6 +1835,135 @@ class TestSimulateSampleSize:
                 seed=42,
                 progress=False,
             )
-        # min_n for DifferenceInDifferences is 20
-        assert result.required_n == 20
+        # Effect is so large even abs_min=4 achieves power
+        assert result.required_n <= 20
         assert result.power_at_n >= 0.80
+
+    @pytest.mark.slow
+    def test_sample_size_searches_below_floor(self):
+        """Large effect → downward search finds required_n below registry floor."""
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=50.0,
+            sigma=1.0,
+            n_simulations=5,
+            seed=42,
+            progress=False,
+        )
+        # min_n for DiD is 20; huge effect should find smaller N
+        assert result.required_n < 20
+
+
+class TestDGPKeyCollisions:
+    """Verify registry-path DGP key collision detection."""
+
+    def test_reject_treatment_effect_collision(self):
+        """treatment_effect in data_generator_kwargs raises ValueError."""
+        with pytest.raises(ValueError, match="conflict"):
+            simulate_power(
+                DifferenceInDifferences(),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={"treatment_effect": 99},
+            )
+
+    def test_reject_noise_sd_collision(self):
+        """noise_sd in data_generator_kwargs raises ValueError."""
+        with pytest.raises(ValueError, match="conflict"):
+            simulate_power(
+                DifferenceInDifferences(),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={"noise_sd": 5.0},
+            )
+
+    def test_allow_cohort_periods_override(self):
+        """cohort_periods is not a protected key — no collision."""
+        # Should not raise
+        simulate_power(
+            CallawaySantAnna(),
+            n_units=60,
+            n_periods=6,
+            treatment_period=3,
+            n_simulations=2,
+            seed=42,
+            progress=False,
+            data_generator_kwargs={"cohort_periods": [2, 4]},
+        )
+
+    def test_allow_n_per_cell_override(self):
+        """n_per_cell is not a protected key — no collision for DDD."""
+        # Should not raise (n_per_cell is in DDD builder output but not
+        # in _PROTECTED_DGP_KEYS, so 3-way intersection is empty)
+        simulate_power(
+            TripleDifference(),
+            n_simulations=2,
+            seed=42,
+            progress=False,
+            data_generator_kwargs={"n_per_cell": 15},
+        )
+
+    def test_collision_skipped_for_custom_dgp(self):
+        """Custom data_generator bypasses collision check entirely."""
+        # unit_fe_sd is accepted by generate_did_data; collision check is
+        # skipped because a custom data_generator is provided.
+        simulate_power(
+            DifferenceInDifferences(),
+            n_simulations=2,
+            seed=42,
+            progress=False,
+            data_generator=generate_did_data,
+            data_generator_kwargs={"unit_fe_sd": 3.0},
+        )
+
+
+class TestStaggeredSingleCohort:
+    """Verify staggered DGP compat check handles single-cohort overrides."""
+
+    def test_staggered_single_cohort_still_warns(self):
+        """CS with cohort_periods=[2] still warns — single cohort."""
+        with pytest.warns(UserWarning, match="DGP mismatch"):
+            simulate_power(
+                CallawaySantAnna(control_group="not_yet_treated"),
+                n_units=60,
+                n_periods=6,
+                treatment_period=3,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={"cohort_periods": [2]},
+            )
+
+    def test_staggered_multi_cohort_no_warn(self):
+        """CS with cohort_periods=[2, 4] does NOT warn."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            simulate_power(
+                CallawaySantAnna(control_group="not_yet_treated"),
+                n_units=60,
+                n_periods=6,
+                treatment_period=3,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={
+                    "cohort_periods": [2, 4],
+                    "never_treated_frac": 0.0,
+                },
+            )
+
+    def test_stacked_strict_single_cohort_warns(self):
+        """StackedDiD clean_control='strict' with cohort_periods=[2] warns."""
+        with pytest.warns(UserWarning, match="DGP mismatch"):
+            simulate_power(
+                StackedDiD(clean_control="strict"),
+                n_units=60,
+                n_periods=6,
+                treatment_period=3,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={"cohort_periods": [2]},
+            )

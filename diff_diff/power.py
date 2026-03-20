@@ -237,6 +237,20 @@ def _extract_staggered(
     )
 
 
+# Keys derived from simulate_power() public params — overriding these
+# via data_generator_kwargs would desync the DGP from the result object.
+_PROTECTED_DGP_KEYS = frozenset(
+    {
+        "treatment_effect",  # → true_effect in results / MDE search variable
+        "noise_sd",  # → sigma param
+        "n_units",  # → sample-size search variable
+        "n_periods",  # → n_periods param
+        "treatment_fraction",  # → treatment_fraction param
+        "treatment_period",  # → treatment_period param
+    }
+)
+
+
 # -- Staggered DGP compatibility check ----------------------------------------
 
 _STAGGERED_ESTIMATORS = frozenset(
@@ -261,11 +275,13 @@ def _check_staggered_dgp_compat(
         return
 
     dgp_overrides = data_generator_kwargs or {}
+    cohort_periods = dgp_overrides.get("cohort_periods")
+    has_multi_cohort = cohort_periods is not None and len(set(cohort_periods)) >= 2
     issues: List[str] = []
 
     # Check control_group="not_yet_treated" (CS, SA)
     cg = getattr(estimator, "control_group", "never_treated")
-    if cg == "not_yet_treated" and "cohort_periods" not in dgp_overrides:
+    if cg == "not_yet_treated" and not has_multi_cohort:
         issues.append(
             f'  - {name} has control_group="not_yet_treated" but the default '
             f"DGP generates a single treatment cohort with never-treated "
@@ -291,7 +307,7 @@ def _check_staggered_dgp_compat(
     # Check clean_control on StackedDiD
     if name == "StackedDiD":
         cc = getattr(estimator, "clean_control", "not_yet_treated")
-        if cc == "strict" and "cohort_periods" not in dgp_overrides:
+        if cc == "strict" and not has_multi_cohort:
             issues.append(
                 '  - StackedDiD has clean_control="strict" but the default '
                 "single-cohort DGP makes strict controls equivalent to "
@@ -1503,6 +1519,28 @@ def simulate_power(
     if profile is not None and not use_custom_dgp:
         _check_staggered_dgp_compat(estimator, data_generator_kwargs)
 
+    # Block registry-path collisions on search-critical keys
+    if profile is not None and not use_custom_dgp and data_gen_kwargs:
+        sample_dgp_keys = set(
+            profile.dgp_kwargs_builder(
+                n_units=n_units,
+                n_periods=n_periods,
+                treatment_effect=treatment_effect,
+                treatment_fraction=treatment_fraction,
+                treatment_period=treatment_period,
+                sigma=sigma,
+            ).keys()
+        )
+        collisions = _PROTECTED_DGP_KEYS & set(data_gen_kwargs) & sample_dgp_keys
+        if collisions:
+            raise ValueError(
+                f"data_generator_kwargs contains keys that conflict with "
+                f"registry-managed simulation inputs: {sorted(collisions)}. "
+                f"These are controlled by simulate_power() parameters directly. "
+                f"Use the corresponding function parameters instead, or pass a "
+                f"custom data_generator to override the DGP entirely."
+            )
+
     # Warn if DDD design inputs are silently ignored
     if estimator_name == "TripleDifference" and not use_custom_dgp:
         _check_ddd_dgp_compat(
@@ -2194,12 +2232,13 @@ def simulate_sample_size(
     grid_step = 8 if is_ddd_grid else 1
     convergence_threshold = grid_step + 1  # 9 for DDD, 2 for others
 
-    def _snap_n(n: int, direction: str = "down") -> int:
+    def _snap_n(n: int, direction: str = "down", floor: Optional[int] = None) -> int:
         if grid_step == 1:
             return n
+        actual_floor = floor if floor is not None else min_n
         if direction == "up":
-            return max(min_n, ((n + grid_step - 1) // grid_step) * grid_step)
-        return max(min_n, (n // grid_step) * grid_step)
+            return max(actual_floor, ((n + grid_step - 1) // grid_step) * grid_step)
+        return max(actual_floor, (n // grid_step) * grid_step)
 
     common_kwargs: Dict[str, Any] = dict(
         estimator=estimator,
@@ -2260,38 +2299,66 @@ def simulate_sample_size(
         lo = min_n
         power_lo = _power_at_n(lo)
         if power_lo >= power:
-            warnings.warn(
-                f"Power at registry floor n={lo} is {power_lo:.2f} >= "
-                f"target {power}. No smaller sample sizes were evaluated. "
-                f"Pass n_range=(lo, hi) to search below this floor.",
-                UserWarning,
-            )
-            return SimulationSampleSizeResults(
-                required_n=lo,
-                power_at_n=power_lo,
-                target_power=power,
-                alpha=alpha,
-                effect_size=treatment_effect,
-                n_simulations_per_step=n_simulations,
-                n_steps=len(search_path),
-                search_path=search_path,
-                estimator_name=estimator_name,
-            )
-        hi = max(100, 2 * min_n)
-        for _ in range(10):
-            if _power_at_n(hi) >= power:
-                break
-            hi *= 2
+            # Floor achieves target — search downward for true minimum
+            hi = lo
+            abs_min = 16 if is_ddd_grid else 4
+            found_lower = False
+            probe = _snap_n(max(abs_min, lo // 2), floor=abs_min)
+            for _ in range(8):
+                if probe >= hi or probe < abs_min:
+                    break
+                pwr = _power_at_n(probe)
+                if pwr < power:
+                    lo = probe
+                    found_lower = True
+                    break
+                hi = probe
+                probe = _snap_n(max(abs_min, probe // 2), floor=abs_min)
+            if not found_lower:
+                # Even smallest viable N achieves target — return best found
+                best = min(
+                    (s for s in search_path if s["power"] >= power),
+                    key=lambda s: s["n_units"],
+                )
+                warnings.warn(
+                    f"Power at n={int(best['n_units'])} is "
+                    f"{best['power']:.2f} >= target {power}. Could not "
+                    f"find a smaller N below target power. Pass "
+                    f"n_range=(lo, hi) to refine.",
+                    UserWarning,
+                )
+                return SimulationSampleSizeResults(
+                    required_n=int(best["n_units"]),
+                    power_at_n=best["power"],
+                    target_power=power,
+                    alpha=alpha,
+                    effect_size=treatment_effect,
+                    n_simulations_per_step=n_simulations,
+                    n_steps=len(search_path),
+                    search_path=search_path,
+                    estimator_name=estimator_name,
+                )
+            # Fall through to bisection with lo..hi bracket
         else:
-            warnings.warn(
-                f"Could not bracket required N (power at n={hi} still below "
-                f"{power}). Returning best upper bound.",
-                UserWarning,
-            )
+            hi = max(100, 2 * min_n)
+            for _ in range(10):
+                if _power_at_n(hi) >= power:
+                    break
+                hi *= 2
+            else:
+                warnings.warn(
+                    f"Could not bracket required N (power at n={hi} still "
+                    f"below {power}). Returning best upper bound.",
+                    UserWarning,
+                )
 
     # --- Bisect on integer n_units ---
     best_n = hi
-    best_power = search_path[-1]["power"] if search_path else 0.0
+    # Look up power at hi (search_path[-1] may not be hi after downward search)
+    best_power = next(
+        (s["power"] for s in reversed(search_path) if int(s["n_units"]) == hi),
+        search_path[-1]["power"] if search_path else 0.0,
+    )
 
     for _ in range(max_steps):
         if hi - lo <= convergence_threshold:
