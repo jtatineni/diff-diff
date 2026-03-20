@@ -247,6 +247,8 @@ _PROTECTED_DGP_KEYS = frozenset(
         "n_periods",  # → n_periods param
         "treatment_fraction",  # → treatment_fraction param
         "treatment_period",  # → treatment_period param
+        "n_pre",  # → derived from treatment_period in factor-model DGPs
+        "n_post",  # → derived from n_periods - treatment_period in factor-model DGPs
     }
 )
 
@@ -2231,6 +2233,15 @@ def simulate_sample_size(
     is_ddd_grid = estimator_name == "TripleDifference" and data_generator is None
     grid_step = 8 if is_ddd_grid else 1
     convergence_threshold = grid_step + 1  # 9 for DDD, 2 for others
+
+    if is_ddd_grid and data_generator_kwargs and "n_per_cell" in data_generator_kwargs:
+        raise ValueError(
+            "data_generator_kwargs contains 'n_per_cell', which conflicts with "
+            "the sample-size search in simulate_sample_size(). For "
+            "TripleDifference, n_per_cell is derived from n_units (the search "
+            "variable). Use simulate_power() with a fixed n_per_cell override "
+            "instead, or pass a custom data_generator."
+        )
 
     def _snap_n(n: int, direction: str = "down", floor: Optional[int] = None) -> int:
         if grid_step == 1:

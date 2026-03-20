@@ -1853,6 +1853,18 @@ class TestSimulateSampleSize:
         # min_n for DiD is 20; huge effect should find smaller N
         assert result.required_n < 20
 
+    def test_reject_n_per_cell_in_ddd_sample_size(self):
+        """n_per_cell override in simulate_sample_size raises for DDD."""
+        with pytest.raises(ValueError, match="n_per_cell"):
+            simulate_sample_size(
+                TripleDifference(),
+                treatment_effect=5.0,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={"n_per_cell": 10},
+            )
+
 
 class TestDGPKeyCollisions:
     """Verify registry-path DGP key collision detection."""
@@ -1904,6 +1916,44 @@ class TestDGPKeyCollisions:
             progress=False,
             data_generator_kwargs={"n_per_cell": 15},
         )
+
+    def test_reject_n_pre_collision_sdid(self):
+        """n_pre in data_generator_kwargs raises for SyntheticDiD (factor DGP)."""
+        with pytest.raises(ValueError, match="conflict"):
+            simulate_power(
+                SyntheticDiD(variance_method="bootstrap"),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={"n_pre": 1},
+            )
+
+    def test_reject_n_post_collision_trop(self):
+        """n_post in data_generator_kwargs raises for TROP (factor DGP)."""
+        with pytest.raises(ValueError, match="conflict"):
+            simulate_power(
+                TROP(),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={"n_post": 5},
+            )
+
+    def test_n_pre_not_rejected_for_basic_did(self):
+        """n_pre passes collision guard for basic DiD (not a derived key there).
+
+        Basic DGP doesn't return n_pre, so 3-way intersection is empty.
+        generate_did_data rejects n_pre (not a valid param), proving the
+        collision guard did NOT fire (would have raised ValueError("conflict")).
+        """
+        with pytest.raises(TypeError, match="n_pre"):
+            simulate_power(
+                DifferenceInDifferences(),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+                data_generator_kwargs={"n_pre": 1},
+            )
 
     def test_collision_skipped_for_custom_dgp(self):
         """Custom data_generator bypasses collision check entirely."""
