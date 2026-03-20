@@ -1061,7 +1061,11 @@ class MultiPeriodDiD(DifferenceInDifferences):
 
         # Degrees of freedom: survey df overrides standard df
         k_effective = int(np.sum(~np.isnan(coefficients)))
-        df = len(y) - k_effective - n_absorbed_effects
+        # For fweights, df uses sum(w) - k (effective sample size)
+        n_eff_df = len(y)
+        if survey_weights is not None and survey_weight_type == "fweight":
+            n_eff_df = int(np.sum(survey_weights))
+        df = n_eff_df - k_effective - n_absorbed_effects
         if resolved_survey is not None and resolved_survey.df_survey is not None:
             df = resolved_survey.df_survey
 

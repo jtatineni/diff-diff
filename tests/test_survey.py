@@ -12,7 +12,7 @@ from diff_diff import (
     SurveyDesign,
     SurveyMetadata,
 )
-from diff_diff.linalg import solve_ols
+from diff_diff.linalg import LinearRegression, solve_ols
 from diff_diff.survey import (
     ResolvedSurveyDesign,
     compute_survey_metadata,
@@ -1332,3 +1332,168 @@ class TestP0P1Fixes:
         assert "weight_type" in d
         assert d["weight_type"] == "pweight"
         assert "effective_n" in d
+
+
+# =============================================================================
+# P1-1 / P1-2 regression tests (PR #218 review round 3)
+# =============================================================================
+
+
+class TestFweightInference:
+    """Verify fweight df = sum(w) - k throughout the stack."""
+
+    def test_fweight_se_matches_expanded_oracle(self):
+        """Fweight SEs must match unweighted OLS on frequency-expanded data."""
+        np.random.seed(42)
+        n = 30
+        x1 = np.random.randn(n)
+        X = np.column_stack([np.ones(n), x1])
+        y = 2.0 + 1.5 * x1 + np.random.randn(n) * 0.5
+        fw = np.random.choice([1, 2, 3], size=n)
+
+        # Oracle: expand each row fw[i] times, run unweighted OLS
+        X_exp = np.repeat(X, fw, axis=0)
+        y_exp = np.repeat(y, fw)
+        coef_exp, _, vcov_exp = solve_ols(X_exp, y_exp)
+        se_exp = np.sqrt(np.diag(vcov_exp))
+
+        # Fweight path: compressed data with integer weights
+        coef_fw, _, vcov_fw = solve_ols(
+            X, y, weights=fw.astype(float), weight_type="fweight"
+        )
+        se_fw = np.sqrt(np.diag(vcov_fw))
+
+        np.testing.assert_allclose(coef_fw, coef_exp, atol=1e-10)
+        np.testing.assert_allclose(se_fw, se_exp, atol=1e-10)
+
+    def test_linear_regression_fweight_df(self):
+        """LinearRegression with fweight must set df_ = sum(w) - k."""
+        np.random.seed(42)
+        n = 30
+        x1 = np.random.randn(n)
+        X = np.column_stack([np.ones(n), x1])
+        y = 2.0 + 1.5 * x1 + np.random.randn(n) * 0.5
+        fw = np.random.choice([1, 2, 3], size=n)
+
+        model = LinearRegression(
+            weights=fw.astype(float),
+            weight_type="fweight",
+            include_intercept=False,
+        )
+        model.fit(X, y)
+
+        k = X.shape[1]
+        expected_df = int(np.sum(fw)) - k
+        assert model.df_ == expected_df
+
+
+class TestWeightedRankDeficiency:
+    """Weighted rank-deficient fits must not produce all-NaN residuals."""
+
+    def test_weighted_rank_deficient_solver_finite_residuals(self):
+        """solve_ols with weights + duplicate column: residuals must be finite."""
+        np.random.seed(42)
+        n = 50
+        x1 = np.random.randn(n)
+        # Duplicate column -> rank-deficient
+        X = np.column_stack([np.ones(n), x1, x1])
+        y = 2.0 + 1.5 * x1 + np.random.randn(n) * 0.3
+        pw = np.random.uniform(0.5, 3.0, size=n)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            coef, resid, vcov = solve_ols(
+                X,
+                y,
+                weights=pw,
+                weight_type="pweight",
+                rank_deficient_action="warn",
+            )
+
+        # Exactly one coefficient should be NaN (dropped duplicate)
+        assert np.sum(np.isnan(coef)) == 1
+
+        # Residuals must all be finite (not all-NaN)
+        assert np.all(np.isfinite(resid)), "Residuals must not be all-NaN"
+
+        # Vcov: NaN rows/cols only for the dropped column
+        nan_col = np.where(np.isnan(coef))[0][0]
+        assert np.all(np.isnan(vcov[nan_col, :])), "Dropped col vcov row should be NaN"
+        assert np.all(np.isnan(vcov[:, nan_col])), "Dropped col vcov col should be NaN"
+
+        # Identified coefficients should have positive, finite SEs
+        kept = np.where(~np.isnan(coef))[0]
+        for i in kept:
+            assert np.isfinite(vcov[i, i]) and vcov[i, i] > 0
+
+    def test_linear_regression_weighted_rank_deficient_robust(self):
+        """LinearRegression with weights + robust + rank deficiency: finite residuals."""
+        np.random.seed(42)
+        n = 50
+        x1 = np.random.randn(n)
+        X = np.column_stack([np.ones(n), x1, x1])
+        y = 2.0 + 1.5 * x1 + np.random.randn(n) * 0.3
+        pw = np.random.uniform(0.5, 3.0, size=n)
+
+        model = LinearRegression(
+            weights=pw,
+            weight_type="pweight",
+            robust=True,
+            include_intercept=False,
+            rank_deficient_action="warn",
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            model.fit(X, y)
+
+        coef = model.coefficients_
+        resid = model.residuals_
+        vcov = model.vcov_
+
+        # One dropped coefficient
+        assert np.sum(np.isnan(coef)) == 1
+
+        # Residuals all finite
+        assert np.all(np.isfinite(resid))
+
+        # Identified coefficients have positive, finite SEs
+        kept = np.where(~np.isnan(coef))[0]
+        for i in kept:
+            assert np.isfinite(vcov[i, i]) and vcov[i, i] > 0
+
+    def test_linear_regression_weighted_rank_deficient_classical(self):
+        """LinearRegression with weights + classical vcov + rank deficiency."""
+        np.random.seed(42)
+        n = 50
+        x1 = np.random.randn(n)
+        X = np.column_stack([np.ones(n), x1, x1])
+        y = 2.0 + 1.5 * x1 + np.random.randn(n) * 0.3
+        pw = np.random.uniform(0.5, 3.0, size=n)
+
+        model = LinearRegression(
+            weights=pw,
+            weight_type="pweight",
+            robust=False,
+            include_intercept=False,
+            rank_deficient_action="warn",
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            model.fit(X, y)
+
+        coef = model.coefficients_
+        resid = model.residuals_
+        vcov = model.vcov_
+
+        # One dropped coefficient
+        assert np.sum(np.isnan(coef)) == 1
+
+        # Residuals all finite
+        assert np.all(np.isfinite(resid))
+
+        # Identified coefficients have positive, finite SEs
+        kept = np.where(~np.isnan(coef))[0]
+        for i in kept:
+            assert np.isfinite(vcov[i, i]) and vcov[i, i] > 0

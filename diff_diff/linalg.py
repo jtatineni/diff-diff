@@ -639,17 +639,42 @@ def solve_ols(
         else:
             coefficients, _resid_w, vcov_out = result
 
-        fitted_orig = np.dot(_original_X, coefficients)
+        # Handle rank-deficient case: use only identified columns for fitted values
+        # to avoid NaN propagation from dropped coefficients
+        nan_mask = np.isnan(coefficients)
+        if np.any(nan_mask):
+            kept_cols = np.where(~nan_mask)[0]
+            fitted_orig = np.dot(_original_X[:, kept_cols], coefficients[kept_cols])
+        else:
+            fitted_orig = np.dot(_original_X, coefficients)
         residuals_orig = _original_y - fitted_orig
 
         if return_vcov:
-            vcov_out = _compute_robust_vcov_numpy(
-                _original_X,
-                residuals_orig,
-                cluster_ids,
-                weights=weights,
-                weight_type=weight_type,
-            )
+            if np.any(nan_mask):
+                kept_cols = np.where(~nan_mask)[0]
+                if len(kept_cols) > 0:
+                    vcov_reduced = _compute_robust_vcov_numpy(
+                        _original_X[:, kept_cols],
+                        residuals_orig,
+                        cluster_ids,
+                        weights=weights,
+                        weight_type=weight_type,
+                    )
+                    vcov_out = _expand_vcov_with_nan(
+                        vcov_reduced, _original_X.shape[1], kept_cols
+                    )
+                else:
+                    vcov_out = np.full(
+                        (_original_X.shape[1], _original_X.shape[1]), np.nan
+                    )
+            else:
+                vcov_out = _compute_robust_vcov_numpy(
+                    _original_X,
+                    residuals_orig,
+                    cluster_ids,
+                    weights=weights,
+                    weight_type=weight_type,
+                )
 
         if return_fitted:
             result = (coefficients, residuals_orig, fitted_orig, vcov_out)
@@ -1547,6 +1572,11 @@ class LinearRegression:
             nan_mask = np.isnan(coefficients)
             k_effective = k - np.sum(nan_mask)  # Number of identified coefficients
 
+            # For fweights, df uses sum(w) - k (effective sample size)
+            n_eff_df = n
+            if self.weights is not None and self.weight_type == "fweight":
+                n_eff_df = int(np.sum(self.weights))
+
             if k_effective == 0:
                 # All coefficients dropped - no valid inference
                 vcov = np.full((k, k), np.nan)
@@ -1557,14 +1587,14 @@ class LinearRegression:
                 if self.weights is not None:
                     # Weighted classical vcov: use weighted RSS and X'WX
                     w = self.weights
-                    mse = np.sum(w * residuals**2) / (n - k_effective)
+                    mse = np.sum(w * residuals**2) / (n_eff_df - k_effective)
                     XtWX_reduced = X_reduced.T @ (X_reduced * w[:, np.newaxis])
                     try:
                         vcov_reduced = np.linalg.solve(XtWX_reduced, mse * np.eye(k_effective))
                     except np.linalg.LinAlgError:
                         vcov_reduced = np.linalg.pinv(XtWX_reduced) * mse
                 else:
-                    mse = np.sum(residuals**2) / (n - k_effective)
+                    mse = np.sum(residuals**2) / (n_eff_df - k_effective)
                     try:
                         vcov_reduced = np.linalg.solve(
                             X_reduced.T @ X_reduced, mse * np.eye(k_effective)
@@ -1578,14 +1608,14 @@ class LinearRegression:
                 if self.weights is not None:
                     # Weighted classical vcov: use weighted RSS and X'WX
                     w = self.weights
-                    mse = np.sum(w * residuals**2) / (n - k)
+                    mse = np.sum(w * residuals**2) / (n_eff_df - k)
                     XtWX = X.T @ (X * w[:, np.newaxis])
                     try:
                         vcov = np.linalg.solve(XtWX, mse * np.eye(k))
                     except np.linalg.LinAlgError:
                         vcov = np.linalg.pinv(XtWX) * mse
                 else:
-                    mse = np.sum(residuals**2) / (n - k)
+                    mse = np.sum(residuals**2) / (n_eff_df - k)
                     try:
                         vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
                     except np.linalg.LinAlgError:
@@ -1611,7 +1641,11 @@ class LinearRegression:
         # This is needed for correct degrees of freedom in inference
         nan_mask = np.isnan(coefficients)
         self.n_params_effective_ = int(self.n_params_ - np.sum(nan_mask))
-        self.df_ = self.n_obs_ - self.n_params_effective_ - df_adjustment
+        # For fweights, df uses sum(w) - k (effective sample size)
+        n_eff_df = self.n_obs_
+        if self.weights is not None and self.weight_type == "fweight":
+            n_eff_df = int(np.sum(self.weights))
+        self.df_ = n_eff_df - self.n_params_effective_ - df_adjustment
 
         # Survey degrees of freedom: n_PSU - n_strata (overrides standard df)
         self.survey_df_ = None
