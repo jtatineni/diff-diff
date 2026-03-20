@@ -1871,6 +1871,9 @@ unequal selection probabilities).
   homoskedastic.
 - **Note:** fweights affect degrees of freedom (`df = sum(w) - k`, not
   `n - k`). This matches Stata convention for frequency-expanded data.
+- **Note:** pweight HC1 meat uses score outer products (Σ s_i s_i' where
+  s_i = w_i x_i u_i), giving w² in the meat. fweight HC1 meat uses
+  X'diag(w u²)X (one power of w), matching frequency-expanded HC1.
 
 ### Survey Degrees of Freedom
 

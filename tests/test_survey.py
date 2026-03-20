@@ -12,7 +12,7 @@ from diff_diff import (
     SurveyDesign,
     SurveyMetadata,
 )
-from diff_diff.linalg import LinearRegression, solve_ols
+from diff_diff.linalg import LinearRegression, compute_robust_vcov, solve_ols
 from diff_diff.survey import (
     ResolvedSurveyDesign,
     compute_survey_metadata,
@@ -305,9 +305,10 @@ class TestReferenceValues:
         beta = np.linalg.solve(XtWX, X.T @ W @ y)
         u = y - X @ beta
 
-        # Hand-compute weighted HC1 sandwich: (X'WX)^{-1} X'diag(w*u²)X (X'WX)^{-1}
+        # Hand-compute weighted HC1 sandwich: (X'WX)^{-1} [Σ w²u² xx'] (X'WX)^{-1}
+        # Score-based: s_i = w_i x_i u_i, meat = Σ s_i s_i'
         n, k = X.shape
-        meat = X.T @ np.diag(w_norm * u**2) @ X
+        meat = X.T @ np.diag(w_norm**2 * u**2) @ X
         bread_inv = np.linalg.inv(XtWX)
         adjustment = n / (n - k)
         vcov_expected = adjustment * bread_inv @ meat @ bread_inv
@@ -2116,3 +2117,99 @@ class TestRound7Fixes:
         # Should NOT raise
         coef, resid, vcov = solve_ols(X, y, weights=w)
         assert coef is not None
+
+
+class TestRound8Fixes:
+    """Tests for round-8 review fixes (PR #218)."""
+
+    def test_weighted_hc1_cluster_consistency(self):
+        """Weighted HC1 SEs match cluster-robust SEs when each obs is its own cluster.
+
+        When cluster_ids=np.arange(n), the cluster-robust estimator reduces to HC1
+        because G=n makes the small-sample adjustments identical:
+        HC1: n/(n-k), Cluster: (n/(n-1))*((n-1)/(n-k)) = n/(n-k).
+        """
+        np.random.seed(801)
+        n = 30
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 1.0 + 2.0 * X[:, 1] + np.random.randn(n) * 0.5
+        w = np.abs(np.random.randn(n)) + 0.1
+
+        # HC1 path
+        _, resid, vcov_hc1 = solve_ols(X, y, weights=w, weight_type="pweight")
+
+        # Cluster path with each obs as its own cluster
+        vcov_cluster = compute_robust_vcov(
+            X, resid, cluster_ids=np.arange(n), weights=w, weight_type="pweight"
+        )
+
+        np.testing.assert_allclose(vcov_hc1, vcov_cluster, atol=1e-12)
+
+    def test_compute_robust_vcov_invalid_weight_type(self):
+        """Invalid weight_type raises ValueError."""
+        np.random.seed(802)
+        n = 10
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        resid = np.random.randn(n)
+        w = np.ones(n)
+
+        with pytest.raises(ValueError, match="weight_type"):
+            compute_robust_vcov(X, resid, weights=w, weight_type="bad")
+
+    def test_compute_robust_vcov_nan_weights(self):
+        """NaN weights raise ValueError via compute_robust_vcov."""
+        np.random.seed(803)
+        n = 10
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        resid = np.random.randn(n)
+        w = np.ones(n)
+        w[2] = np.nan
+
+        with pytest.raises(ValueError, match="NaN"):
+            compute_robust_vcov(X, resid, weights=w)
+
+    def test_compute_robust_vcov_inf_weights(self):
+        """Inf weights raise ValueError via compute_robust_vcov."""
+        np.random.seed(804)
+        n = 10
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        resid = np.random.randn(n)
+        w = np.ones(n)
+        w[0] = np.inf
+
+        with pytest.raises(ValueError, match="Inf"):
+            compute_robust_vcov(X, resid, weights=w)
+
+    def test_compute_robust_vcov_negative_weights(self):
+        """Negative weights raise ValueError via compute_robust_vcov."""
+        np.random.seed(805)
+        n = 10
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        resid = np.random.randn(n)
+        w = np.ones(n)
+        w[3] = -0.5
+
+        with pytest.raises(ValueError, match="non-negative"):
+            compute_robust_vcov(X, resid, weights=w)
+
+    def test_fweight_df_rounding(self):
+        """Near-integer fweights use rounded (not truncated) sum for df."""
+        np.random.seed(806)
+        n = 10
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = np.random.randn(n)
+        # Near-integer weights that would truncate incorrectly
+        w = np.full(n, 2.0 - 1e-14)
+
+        reg = LinearRegression(
+            weights=w, weight_type="fweight", include_intercept=False
+        )
+        reg.fit(X, y)
+        # sum(w) ≈ 20 - 1e-13; round → 20, truncate → 19
+        assert reg.df_ == 20 - reg.n_params_effective_
+
+        # Also verify compute_robust_vcov path produces valid output
+        _, resid, _ = solve_ols(X, y, weights=w, weight_type="fweight")
+        vcov = compute_robust_vcov(X, resid, weights=w, weight_type="fweight")
+        assert np.all(np.isfinite(vcov))
+        assert np.all(np.diag(vcov) > 0)

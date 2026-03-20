@@ -930,8 +930,10 @@ def compute_robust_vcov(
     Notes
     -----
     For HC1 (no clustering):
-        meat = X' * diag(u^2) * X
-        adjustment = n / (n - k)
+        pweight: meat = Σ s_i s_i' where s_i = w_i x_i u_i (w² in meat)
+        fweight: meat = X' diag(w u²) X (matches frequency-expanded HC1)
+        aweight/unweighted: meat = X' diag(u²) X
+        adjustment = n / (n - k)  (fweight uses n_eff = sum(w))
 
     For cluster-robust:
         meat = sum_g (X_g' u_g)(X_g' u_g)'
@@ -940,6 +942,10 @@ def compute_robust_vcov(
     The cluster-robust computation is vectorized using pandas groupby,
     which is much faster than a Python loop over clusters.
     """
+    # Validate weights before dispatching to backend
+    if weights is not None:
+        weights = _validate_weights(weights, weight_type, X.shape[0])
+
     # Use Rust backend if available AND no weights (Rust doesn't support weights yet)
     if HAS_RUST_BACKEND and weights is None:
         X = np.ascontiguousarray(X, dtype=np.float64)
@@ -1025,7 +1031,7 @@ def _compute_robust_vcov_numpy(
     the O(n * G) loop that would be required with explicit iteration.
 
     Weight type affects the meat computation:
-    - pweight: scores = w_i * X_i * u_i (weighted scores)
+    - pweight: scores = w_i * X_i * u_i (HC1 meat = Σ s_i s_i' = X'diag(w²u²)X)
     - fweight: scores = w_i * X_i * u_i (weighted scores), df = sum(w) - k
     - aweight: scores = X_i * u_i (no weight in meat; after WLS, errors ~homoskedastic)
     """
@@ -1041,7 +1047,7 @@ def _compute_robust_vcov_numpy(
     # Effective n for df computation (fweights use sum(w))
     n_eff = n
     if weights is not None and weight_type == "fweight":
-        n_eff = int(np.sum(weights))
+        n_eff = int(round(np.sum(weights)))
 
     # Compute weighted scores for cluster-robust meat (outer product of sums).
     # pweight/fweight multiply by w; aweight and unweighted use raw residuals.
@@ -1053,12 +1059,14 @@ def _compute_robust_vcov_numpy(
 
     if cluster_ids is None:
         # HC1 (heteroskedasticity-robust) standard errors
-        # For HC1, meat = X' diag(w * u²) X (NOT scores'scores which gives w²*u²)
         adjustment = n_eff / (n_eff - k)
-        if _use_weighted_scores:
+        if weights is not None and weight_type == "fweight":
+            # fweight: frequency-expanded HC1, meat = Σ w_i x_i x_i' u_i²
             meat = np.dot(X.T, X * (weights * residuals**2)[:, np.newaxis])
         else:
-            meat = np.dot(X.T, X * (residuals**2)[:, np.newaxis])
+            # pweight: WLS score outer product, meat = Σ w_i² x_i x_i' u_i²
+            # aweight/unweighted: meat = Σ x_i x_i' u_i² (scores have no w)
+            meat = scores.T @ scores
     else:
         # Cluster-robust standard errors (vectorized via groupby)
         cluster_ids = np.asarray(cluster_ids)
@@ -1643,7 +1651,7 @@ class LinearRegression:
             # For fweights, df uses sum(w) - k (effective sample size)
             n_eff_df = n
             if self.weights is not None and self.weight_type == "fweight":
-                n_eff_df = int(np.sum(self.weights))
+                n_eff_df = int(round(np.sum(self.weights)))
 
             if k_effective == 0:
                 # All coefficients dropped - no valid inference
@@ -1723,7 +1731,7 @@ class LinearRegression:
         # For fweights, df uses sum(w) - k (effective sample size)
         n_eff_df = self.n_obs_
         if self.weights is not None and self.weight_type == "fweight":
-            n_eff_df = int(np.sum(self.weights))
+            n_eff_df = int(round(np.sum(self.weights)))
         self.df_ = n_eff_df - self.n_params_effective_ - df_adjustment
 
         # Survey degrees of freedom: n_PSU - n_strata (overrides standard df)
