@@ -1146,6 +1146,30 @@ class TestEstimatorCoverage:
         ), f"DDD required_n={result.required_n} is not a multiple of 8"
 
     @pytest.mark.slow
+    def test_ddd_sample_size_low_range(self):
+        """DDD sample-size search with low n_range stays within bracket."""
+        result = simulate_sample_size(
+            TripleDifference(),
+            n_periods=2,
+            treatment_period=1,
+            treatment_effect=0.5,
+            sigma=5.0,
+            n_simulations=5,
+            n_range=(16, 56),
+            seed=42,
+            progress=False,
+        )
+        assert (
+            result.required_n % 8 == 0
+        ), f"DDD required_n={result.required_n} is not a multiple of 8"
+        assert (
+            16 <= result.required_n <= 56
+        ), f"DDD required_n={result.required_n} outside requested bracket [16, 56]"
+        assert (
+            len(result.search_path) > 2
+        ), f"Bisection should explore >2 points, got {len(result.search_path)}"
+
+    @pytest.mark.slow
     def test_trop(self):
         result = simulate_power(
             TROP(),

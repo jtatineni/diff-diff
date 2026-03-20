@@ -2316,8 +2316,11 @@ def simulate_sample_size(
         return pwr
 
     # --- Bracket ---
+    abs_min = 16 if is_ddd_grid else 4
     if n_range is not None:
-        lo, hi = _snap_n(n_range[0], "up"), _snap_n(n_range[1], "down")
+        lo, hi = _snap_n(n_range[0], "up", floor=abs_min), _snap_n(
+            n_range[1], "down", floor=abs_min
+        )
         if lo > hi:
             lo = hi  # collapsed bracket — evaluate single point
         power_lo = _power_at_n(lo)
@@ -2351,7 +2354,6 @@ def simulate_sample_size(
         if power_lo >= power:
             # Floor achieves target — search downward for true minimum
             hi = lo
-            abs_min = 16 if is_ddd_grid else 4
             found_lower = False
             probe = _snap_n(max(abs_min, lo // 2), floor=abs_min)
             for _ in range(8):
@@ -2413,7 +2415,7 @@ def simulate_sample_size(
     for _ in range(max_steps):
         if hi - lo <= convergence_threshold:
             break
-        mid = _snap_n((lo + hi) // 2)
+        mid = _snap_n((lo + hi) // 2, floor=abs_min)
         if mid <= lo or mid >= hi:
             break
         pwr = _power_at_n(mid)
