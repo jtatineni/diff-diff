@@ -21,6 +21,8 @@ import urllib.request
 # Maps filename prefixes (under diff_diff/) to REGISTRY.md ## section headings.
 # Longest-prefix match is used so companion files (e.g. sun_abraham_bootstrap.py)
 # inherit the mapping of their parent (sun_abraham).
+# Submodule directories (e.g. diff_diff/visualization/) are also matched.
+# MAINTENANCE: Update this mapping when adding new estimator modules.
 PREFIX_TO_SECTIONS = {
     "estimators": ["DifferenceInDifferences", "MultiPeriodDiD"],
     "twfe": ["TwoWayFixedEffects"],

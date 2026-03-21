@@ -166,11 +166,37 @@ If the script exits non-zero, display the error output and stop.
 
 Read and display the full contents of `.claude/reviews/local-review-latest.md`.
 
-### Step 7: Offer Next Steps Based on Assessment
+### Step 7: Summarize Findings and Offer Next Steps
 
-Parse the review output to determine the assessment:
-- Look for patterns: `⛔` (Blocker), `⚠️` (Needs changes), `✅` (Looks good)
-- Count severity labels: P0, P1, P2, P3
+Parse the review output to extract ALL findings. For each finding, capture:
+- Severity (P0/P1/P2/P3)
+- Section (Methodology, Code Quality, etc.)
+- One-line summary of the issue
+
+Present a **findings summary** showing every finding, grouped by severity:
+
+```
+## Review Summary: <assessment emoji and label>
+
+### P0 — Blockers
+1. [Methodology] <one-line summary> — <file:line>
+2. [Security] <one-line summary> — <file:line>
+
+### P1 — Needs Changes
+1. [Code Quality] <one-line summary> — <file:line>
+
+### P2 — Should Fix
+1. [Documentation] <one-line summary> — <file:line>
+
+### P3 — Informational (no action required)
+1. [Maintainability] <one-line summary> — <file:line>
+2. [Tech Debt] <one-line summary> — <file:line>
+```
+
+Omit severity groups that have zero findings. The full review with details is already
+displayed in Step 6 — this summary helps the user quickly assess what needs attention.
+
+Then use AskUserQuestion, tailored to the severity:
 
 **If no findings at all** (clean review):
 ```
@@ -179,31 +205,18 @@ Review passed with no findings. Suggested next steps:
 - /submit-pr — commit and open a pull request
 ```
 
-**If any findings exist** (P0, P1, P2, or P3):
-
-Use AskUserQuestion. Tailor the summary and recommendation to the severity:
-
-For ⚠️ or ⛔ (P0/P1 findings):
+**For ⛔ or ⚠️ (P0/P1 findings)**:
 ```
-The review found issues that need attention:
-- N P0 finding(s) (blockers)
-- N P1 finding(s) (needs changes)
-- N P2/P3 finding(s) (minor/informational)
-
 Options:
 1. Enter plan mode to address findings (Recommended)
 2. Re-run with --full-registry for deeper methodology context
 3. Skip — I'll address these manually
 ```
 
-For ✅ with P2/P3 findings only:
+**For ✅ with P2/P3 findings only**:
 ```
-Review passed (no P0/P1 blockers), but there are minor findings:
-- N P2 finding(s)
-- N P3 finding(s) (informational)
-
 Options:
-1. Address P2 findings before submitting
+1. Address findings before submitting
 2. Skip — proceed to /pre-merge-check and /submit-pr
 ```
 
@@ -259,5 +272,9 @@ rm -f /tmp/ai-review-diff.patch /tmp/ai-review-files.txt
   code-change review rather than PR review
 - The CI review (Codex action with full repo access) remains the authoritative final
   check — local review is a fast first pass to catch most issues early
+- **Data transmission**: In non-dry-run mode, this skill transmits the unified diff,
+  changed-file metadata, selected methodology registry text, and prior review context
+  (if present) to OpenAI via the Chat Completions API. Use `--dry-run` to preview
+  exactly what would be sent.
 - This skill pairs naturally with the iterative workflow:
   `/ai-review-local` -> address findings -> `/ai-review-local` -> `/submit-pr`
