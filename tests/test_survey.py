@@ -3113,7 +3113,7 @@ class TestRound19Fixes:
 
 
 class TestRound21Fixes:
-    """Reject absorb + fixed_effects + survey_design (FWL violation)."""
+    """Reject absorb + fixed_effects (FWL violation)."""
 
     def _make_panel(self):
         """Create a simple panel dataset for testing."""
@@ -3140,7 +3140,7 @@ class TestRound21Fixes:
         """DiD rejects absorb + fixed_effects + survey_design."""
         df = self._make_panel()
         model = DifferenceInDifferences()
-        with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects with survey"):
+        with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects"):
             model.fit(
                 df,
                 formula="outcome ~ treated * post",
@@ -3153,7 +3153,7 @@ class TestRound21Fixes:
         """MultiPeriodDiD rejects absorb + fixed_effects + survey_design."""
         df = self._make_panel()
         model = MultiPeriodDiD()
-        with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects with survey"):
+        with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects"):
             model.fit(
                 df,
                 outcome="outcome",
@@ -3164,15 +3164,28 @@ class TestRound21Fixes:
                 survey_design=SurveyDesign(weights="sw"),
             )
 
-    def test_absorb_fe_without_survey_still_works(self):
-        """absorb + fixed_effects without survey weights is not rejected."""
+    def test_absorb_fe_rejected_without_survey_did(self):
+        """DiD rejects absorb + fixed_effects even without survey weights."""
         df = self._make_panel()
         model = DifferenceInDifferences()
-        result = model.fit(
-            df,
-            formula="outcome ~ treated * post",
-            absorb=["unit"],
-            fixed_effects=["region"],
-        )
-        assert result is not None
-        assert hasattr(result, "att")
+        with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects"):
+            model.fit(
+                df,
+                formula="outcome ~ treated * post",
+                absorb=["unit"],
+                fixed_effects=["region"],
+            )
+
+    def test_absorb_fe_rejected_without_survey_multi_period(self):
+        """MultiPeriodDiD rejects absorb + fixed_effects even without survey weights."""
+        df = self._make_panel()
+        model = MultiPeriodDiD()
+        with pytest.raises(ValueError, match="Cannot use both absorb and fixed_effects"):
+            model.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="time",
+                absorb=["unit"],
+                fixed_effects=["region"],
+            )

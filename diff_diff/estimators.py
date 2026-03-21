@@ -260,11 +260,12 @@ class DifferenceInDifferences:
                 "Use absorb with a single variable, or use fixed_effects= instead."
             )
 
-        if absorb and fixed_effects and survey_weights is not None:
+        if absorb and fixed_effects:
             raise ValueError(
-                "Cannot use both absorb and fixed_effects with survey weights. "
+                "Cannot use both absorb and fixed_effects. "
                 "The absorb within-transformation does not residualize "
-                "fixed_effects dummies. Use absorb alone (for high-dimensional FE) "
+                "fixed_effects dummies, violating the FWL theorem. "
+                "Use absorb alone (for high-dimensional FE) "
                 "or fixed_effects alone (for low-dimensional FE)."
             )
 
@@ -1024,11 +1025,12 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 "Use absorb with a single variable, or use fixed_effects= instead."
             )
 
-        if absorb and fixed_effects and survey_weights is not None:
+        if absorb and fixed_effects:
             raise ValueError(
-                "Cannot use both absorb and fixed_effects with survey weights. "
+                "Cannot use both absorb and fixed_effects. "
                 "The absorb within-transformation does not residualize "
-                "fixed_effects dummies. Use absorb alone (for high-dimensional FE) "
+                "fixed_effects dummies, violating the FWL theorem. "
+                "Use absorb alone (for high-dimensional FE) "
                 "or fixed_effects alone (for low-dimensional FE)."
             )
 
