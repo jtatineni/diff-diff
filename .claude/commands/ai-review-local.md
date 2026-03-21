@@ -68,9 +68,27 @@ mkdir -p .claude/reviews
 
 ### Step 3: Commit Changes and Generate Diff
 
-Determine the base branch (the repo's default branch, not the current branch's upstream):
+Determine and validate the comparison ref (matching the pattern from `/push-pr-update`):
+
 ```bash
-base_branch=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "main")
+# Get the repo's default branch name
+default_branch=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "main")
+
+# Resolve to a validated local ref (fallback chain for shallow/single-branch clones)
+if git rev-parse --verify "$default_branch" >/dev/null 2>&1; then
+    comparison_ref="$default_branch"
+elif git rev-parse --verify "origin/$default_branch" >/dev/null 2>&1; then
+    comparison_ref="origin/$default_branch"
+else
+    git fetch origin "$default_branch" --depth=1 2>/dev/null || true
+    comparison_ref="origin/$default_branch"
+fi
+```
+
+If the comparison ref still doesn't resolve, abort:
+```
+Error: Cannot resolve comparison ref for '$default_branch'. Ensure you have
+fetched the default branch: git fetch origin $default_branch
 ```
 
 Check for uncommitted changes (modified, staged, or untracked):
@@ -90,14 +108,14 @@ If the commit fails (e.g., pre-commit hook), display the error and stop.
 
 Generate diff and metadata:
 ```bash
-git diff --unified=5 "${base_branch}...HEAD" > /tmp/ai-review-diff.patch
-git diff --name-status "${base_branch}...HEAD" > /tmp/ai-review-files.txt
+git diff --unified=5 "${comparison_ref}...HEAD" > /tmp/ai-review-diff.patch
+git diff --name-status "${comparison_ref}...HEAD" > /tmp/ai-review-files.txt
 branch_name=$(git branch --show-current)
 ```
 
 If the diff is empty, report:
 ```
-No committed changes vs ${base_branch} to review.
+No committed changes vs ${comparison_ref} to review.
 ```
 Clean up temp files and stop.
 
@@ -108,10 +126,10 @@ Before sending any diff content to OpenAI, run the canonical secret scan pattern
 
 ```bash
 # Content pattern — search diff content, output filenames only (never echo secret values)
-secret_files=$(git diff -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only "${base_branch}...HEAD" 2>/dev/null || true)
+secret_files=$(git diff -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only "${comparison_ref}...HEAD" 2>/dev/null || true)
 
 # Sensitive filename pattern
-sensitive_files=$(git diff --name-only "${base_branch}...HEAD" | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true)
+sensitive_files=$(git diff --name-only "${comparison_ref}...HEAD" | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true)
 ```
 
 If either `secret_files` or `sensitive_files` is non-empty, use AskUserQuestion:
@@ -201,7 +219,6 @@ Then use AskUserQuestion, tailored to the severity:
 **If no findings at all** (clean review):
 ```
 Review passed with no findings. Suggested next steps:
-- /pre-merge-check — run local pattern checks
 - /submit-pr — commit and open a pull request
 ```
 
@@ -217,7 +234,7 @@ Options:
 ```
 Options:
 1. Address findings before submitting
-2. Skip — proceed to /pre-merge-check and /submit-pr
+2. Skip — proceed to /submit-pr
 ```
 
 **If user chooses to address findings**: Parse the findings from the review output.
