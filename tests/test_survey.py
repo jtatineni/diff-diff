@@ -2824,3 +2824,51 @@ class TestRound14Fixes:
                 survey_design=sd,
             )
         assert np.isfinite(result.avg_att)
+
+
+class TestRound15Fixes:
+    """Tests for PR #218 review round 15: NA validation for survey identifiers."""
+
+    def test_strata_with_na_rejected(self):
+        """SurveyDesign.resolve() rejects NA values in strata column."""
+        df = pd.DataFrame(
+            {
+                "y": [1.0, 2.0, 3.0, 4.0],
+                "w": [1.0, 1.0, 1.0, 1.0],
+                "strat": [0, 1, None, 0],  # NA in strata
+            }
+        )
+        sd = SurveyDesign(weights="w", weight_type="pweight", strata="strat")
+        with pytest.raises(ValueError, match="Strata column.*missing values"):
+            sd.resolve(df)
+
+    def test_psu_with_na_rejected(self):
+        """SurveyDesign.resolve() rejects NA values in PSU column."""
+        df = pd.DataFrame(
+            {
+                "y": [1.0, 2.0, 3.0, 4.0],
+                "w": [1.0, 1.0, 1.0, 1.0],
+                "cluster": [0, 1, np.nan, 0],  # NA in PSU
+            }
+        )
+        sd = SurveyDesign(weights="w", weight_type="pweight", psu="cluster")
+        with pytest.raises(ValueError, match="PSU column.*missing values"):
+            sd.resolve(df)
+
+    def test_cluster_as_psu_with_na_rejected(self):
+        """_inject_cluster_as_psu rejects NA values in cluster IDs."""
+        from diff_diff.survey import _inject_cluster_as_psu
+
+        resolved = ResolvedSurveyDesign(
+            weights=np.ones(4),
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
+        )
+        cluster_ids = np.array([0, 1, np.nan, 0])
+        with pytest.raises(ValueError, match="Cluster IDs contain missing"):
+            _inject_cluster_as_psu(resolved, cluster_ids)

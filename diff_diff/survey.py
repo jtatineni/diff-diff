@@ -128,7 +128,13 @@ class SurveyDesign:
         if self.strata is not None:
             if self.strata not in data.columns:
                 raise ValueError(f"Strata column '{self.strata}' not found in data")
-            strata_arr = _factorize_cluster_ids(data[self.strata].values)
+            strata_vals = data[self.strata].values
+            if pd.isna(strata_vals).any():
+                raise ValueError(
+                    f"Strata column '{self.strata}' contains missing values. "
+                    "All observations must have valid strata identifiers."
+                )
+            strata_arr = _factorize_cluster_ids(strata_vals)
             n_strata = len(np.unique(strata_arr))
 
         # --- PSU ---
@@ -138,6 +144,11 @@ class SurveyDesign:
             if self.psu not in data.columns:
                 raise ValueError(f"PSU column '{self.psu}' not found in data")
             psu_raw = data[self.psu].values
+            if pd.isna(psu_raw).any():
+                raise ValueError(
+                    f"PSU column '{self.psu}' contains missing values. "
+                    "All observations must have valid PSU identifiers."
+                )
 
             if self.nest and strata_arr is not None:
                 # Make PSU IDs unique within strata by combining
@@ -439,6 +450,14 @@ def _inject_cluster_as_psu(resolved, cluster_ids):
         return resolved
     if resolved.psu is not None:
         return resolved  # PSU already present; _resolve_effective_cluster handles this
+
+    # Validate no missing cluster IDs before factorization
+    if pd.isna(cluster_ids).any():
+        raise ValueError(
+            "Cluster IDs contain missing values. "
+            "All observations must have valid cluster identifiers "
+            "when used as effective PSUs for survey variance estimation."
+        )
 
     # Factorize cluster_ids for consistent integer encoding
     codes, uniques = pd.factorize(cluster_ids)

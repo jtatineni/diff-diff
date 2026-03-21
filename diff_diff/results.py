@@ -34,9 +34,9 @@ class DiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated observations.
+        Number of treated units/observations.
     n_control : int
-        Number of control observations.
+        Number of control units/observations.
     """
 
     att: float
@@ -93,8 +93,8 @@ class DiDResults:
             "=" * 70,
             "",
             f"{'Observations:':<25} {self.n_obs:>10}",
-            f"{'Treated obs:':<25} {self.n_treated:>10}",
-            f"{'Control obs:':<25} {self.n_control:>10}",
+            f"{'Treated:':<25} {self.n_treated:>10}",
+            f"{'Control:':<25} {self.n_control:>10}",
         ]
 
         if self.r_squared is not None:
@@ -312,9 +312,9 @@ class MultiPeriodDiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated observations.
+        Number of treated units/observations.
     n_control : int
-        Number of control observations.
+        Number of control units/observations.
     pre_periods : list
         List of pre-treatment period identifiers.
     post_periods : list
@@ -645,9 +645,9 @@ class SyntheticDiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated observations.
+        Number of treated units/observations.
     n_control : int
-        Number of control observations.
+        Number of control units/observations.
     unit_weights : dict
         Dictionary mapping control unit IDs to their synthetic weights.
     time_weights : dict
@@ -714,8 +714,8 @@ class SyntheticDiDResults:
             "=" * 75,
             "",
             f"{'Observations:':<25} {self.n_obs:>10}",
-            f"{'Treated obs:':<25} {self.n_treated:>10}",
-            f"{'Control obs:':<25} {self.n_control:>10}",
+            f"{'Treated:':<25} {self.n_treated:>10}",
+            f"{'Control:':<25} {self.n_control:>10}",
             f"{'Pre-treatment periods:':<25} {len(self.pre_periods):>10}",
             f"{'Post-treatment periods:':<25} {len(self.post_periods):>10}",
         ]
