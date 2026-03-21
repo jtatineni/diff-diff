@@ -94,6 +94,10 @@ from diff_diff.results import (
     PeriodEffect,
     SyntheticDiDResults,
 )
+from diff_diff.survey import (
+    SurveyDesign,
+    SurveyMetadata,
+)
 from diff_diff.staggered import (
     CallawaySantAnna,
     CallawaySantAnnaResults,
@@ -312,6 +316,9 @@ __all__ = [
     "compute_pretrends_power",
     "compute_mdv",
     "plot_pretrends_power",
+    # Survey support
+    "SurveyDesign",
+    "SurveyMetadata",
     # Rust backend
     "HAS_RUST_BACKEND",
     # Linear algebra helpers

@@ -34,9 +34,9 @@ class DiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated units.
+        Number of treated units/observations.
     n_control : int
-        Number of control units.
+        Number of control units/observations.
     """
 
     att: float
@@ -58,6 +58,8 @@ class DiDResults:
     n_bootstrap: Optional[int] = field(default=None)
     n_clusters: Optional[int] = field(default=None)
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -91,12 +93,34 @@ class DiDResults:
             "=" * 70,
             "",
             f"{'Observations:':<25} {self.n_obs:>10}",
-            f"{'Treated units:':<25} {self.n_treated:>10}",
-            f"{'Control units:':<25} {self.n_control:>10}",
+            f"{'Treated:':<25} {self.n_treated:>10}",
+            f"{'Control:':<25} {self.n_control:>10}",
         ]
 
         if self.r_squared is not None:
             lines.append(f"{'R-squared:':<25} {self.r_squared:>10.4f}")
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(
+                [
+                    "",
+                    "-" * 70,
+                    "Survey Design".center(70),
+                    "-" * 70,
+                    f"{'Weight type:':<25} {sm.weight_type:>10}",
+                ]
+            )
+            if sm.n_strata is not None:
+                lines.append(f"{'Strata:':<25} {sm.n_strata:>10}")
+            if sm.n_psu is not None:
+                lines.append(f"{'PSU/Cluster:':<25} {sm.n_psu:>10}")
+            lines.append(f"{'Effective sample size:':<25} {sm.effective_n:>10.1f}")
+            lines.append(f"{'Design effect (DEFF):':<25} {sm.design_effect:>10.2f}")
+            if sm.df_survey is not None:
+                lines.append(f"{'Survey d.f.:':<25} {sm.df_survey:>10}")
+            lines.append("-" * 70)
 
         # Add inference method info
         if self.inference_method != "analytical":
@@ -160,6 +184,15 @@ class DiDResults:
             result["n_bootstrap"] = self.n_bootstrap
         if self.n_clusters is not None:
             result["n_clusters"] = self.n_clusters
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            result["weight_type"] = sm.weight_type
+            result["effective_n"] = sm.effective_n
+            result["design_effect"] = sm.design_effect
+            result["sum_weights"] = sm.sum_weights
+            result["n_strata"] = sm.n_strata
+            result["n_psu"] = sm.n_psu
+            result["df_survey"] = sm.df_survey
         return result
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -279,9 +312,9 @@ class MultiPeriodDiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated observations.
+        Number of treated units/observations.
     n_control : int
-        Number of control observations.
+        Number of control units/observations.
     pre_periods : list
         List of pre-treatment period identifiers.
     post_periods : list
@@ -314,6 +347,8 @@ class MultiPeriodDiDResults:
     r_squared: Optional[float] = field(default=None)
     reference_period: Optional[Any] = field(default=None)
     interaction_indices: Optional[Dict[Any, int]] = field(default=None, repr=False)
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -366,6 +401,28 @@ class MultiPeriodDiDResults:
 
         if self.r_squared is not None:
             lines.append(f"{'R-squared:':<25} {self.r_squared:>10.4f}")
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(
+                [
+                    "",
+                    "-" * 80,
+                    "Survey Design".center(80),
+                    "-" * 80,
+                    f"{'Weight type:':<25} {sm.weight_type:>10}",
+                ]
+            )
+            if sm.n_strata is not None:
+                lines.append(f"{'Strata:':<25} {sm.n_strata:>10}")
+            if sm.n_psu is not None:
+                lines.append(f"{'PSU/Cluster:':<25} {sm.n_psu:>10}")
+            lines.append(f"{'Effective sample size:':<25} {sm.effective_n:>10.1f}")
+            lines.append(f"{'Design effect (DEFF):':<25} {sm.design_effect:>10.2f}")
+            if sm.df_survey is not None:
+                lines.append(f"{'Survey d.f.:':<25} {sm.df_survey:>10}")
+            lines.append("-" * 80)
 
         # Pre-period effects (parallel trends test)
         pre_effects = {p: pe for p, pe in self.period_effects.items() if p in self.pre_periods}
@@ -515,6 +572,17 @@ class MultiPeriodDiDResults:
             result[f"se_period_{period}"] = pe.se
             result[f"pval_period_{period}"] = pe.p_value
 
+        # Add survey metadata if present
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            result["weight_type"] = sm.weight_type
+            result["effective_n"] = sm.effective_n
+            result["design_effect"] = sm.design_effect
+            result["sum_weights"] = sm.sum_weights
+            result["n_strata"] = sm.n_strata
+            result["n_psu"] = sm.n_psu
+            result["df_survey"] = sm.df_survey
+
         return result
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -577,9 +645,9 @@ class SyntheticDiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated units.
+        Number of treated units/observations.
     n_control : int
-        Number of control units.
+        Number of control units/observations.
     unit_weights : dict
         Dictionary mapping control unit IDs to their synthetic weights.
     time_weights : dict
@@ -646,8 +714,8 @@ class SyntheticDiDResults:
             "=" * 75,
             "",
             f"{'Observations:':<25} {self.n_obs:>10}",
-            f"{'Treated units:':<25} {self.n_treated:>10}",
-            f"{'Control units:':<25} {self.n_control:>10}",
+            f"{'Treated:':<25} {self.n_treated:>10}",
+            f"{'Control:':<25} {self.n_control:>10}",
             f"{'Pre-treatment periods:':<25} {len(self.pre_periods):>10}",
             f"{'Post-treatment periods:':<25} {len(self.post_periods):>10}",
         ]

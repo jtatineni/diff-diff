@@ -1826,6 +1826,93 @@ should be a deliberate user choice.
 
 ---
 
+## Survey Data Support
+
+Survey-weighted estimation allows correct population-level inference from data
+collected via complex survey designs (multi-stage sampling, stratification,
+unequal selection probabilities).
+
+### Weighted Estimation
+
+- **Reference**: Lumley (2004) "Analysis of Complex Survey Samples", Journal of
+  Statistical Software 9(8). Solon, Haider, & Wooldridge (2015) "What Are We
+  Weighting For?" Journal of Human Resources 50(2).
+- **WLS formula**: `beta_WLS = (X'WX)^{-1} X'Wy` where `W = diag(w_i)`
+- **Implementation**: Equivalent transformation via `sqrt(w)` scaling, then
+  standard OLS. Residuals back-transformed to original scale.
+- **Weight types**: pweight (inverse selection probability), fweight
+  (frequency/expansion), aweight (inverse variance/precision)
+- **Note:** Weight normalization uses `sum(w) = n` convention (DRDID/Stata), not
+  raw weights (R `survey`). Coefficients are identical; SEs differ by constant
+  factor.
+
+### Taylor Series Linearization (TSL) Variance
+
+- **Reference**: Binder (1983) "On the Variances of Asymptotically Normal
+  Estimators from Complex Surveys", International Statistical Review 51(3).
+  Lumley (2004).
+- **Formula**: `V_TSL = (X'WX)^{-1} [sum_h V_h] (X'WX)^{-1}` with stratified
+  PSU-level scores
+- **Relationship to sandwich estimator**: TSL is a generalization of the
+  Huber-White sandwich estimator that accounts for stratification and finite
+  population correction
+- **Deviation from R:** R `survey` defaults `lonely_psu` to "fail"; we default
+  to "remove" with warning, matching common applied practice
+- **Edge case**: Singleton strata (one PSU per stratum) — handled via
+  `lonely_psu` parameter ("remove", "certainty", or "adjust")
+- **Note:** For unstratified designs with a single PSU, all `lonely_psu` modes
+  produce NaN variance. The "adjust" mode cannot center against a global mean
+  when there is only one stratum (the single PSU is the entire sample).
+- **Note:** Weights-only designs (no explicit PSU or strata) use implicit
+  per-observation PSUs for the TSL meat computation, consistent with the
+  stratified-no-PSU path. The adjustment factor is `n/(n-1)` (not HC1's
+  `n/(n-k)`).
+
+### Weight Type Effects on Inference
+
+- **Note:** aweights use unweighted meat in the sandwich estimator (no `w` in
+  `u^2` term). This matches Stata convention. Rationale: aweights model known
+  heteroskedasticity; after WLS transformation, errors are approximately
+  homoskedastic.
+- **Note:** fweights affect degrees of freedom (`df = sum(w) - k`, not
+  `n - k`). This matches Stata convention for frequency-expanded data.
+- **Note:** pweight HC1 meat uses score outer products (Σ s_i s_i' where
+  s_i = w_i x_i u_i), giving w² in the meat. fweight HC1 meat uses
+  X'diag(w u²)X (one power of w), matching frequency-expanded HC1.
+- **Note:** fweights must be positive integers; fractional values are
+  rejected by `_validate_weights()`. This matches Stata's convention and
+  avoids ambiguous frequency semantics.
+
+### Absorbed Fixed Effects with Survey Weights
+
+- **Note:** When `absorb` is used with a single variable in DiD/MultiPeriodDiD,
+  all regressors (treatment, time, interactions, covariates) are within-transformed
+  alongside the outcome per the FWL theorem. Regressors collinear with
+  the absorbed FE (e.g., treatment after absorbing unit FE) are dropped
+  via rank-deficiency handling. Multiple absorbed variables with survey weights
+  are rejected (single-pass sequential demeaning is not the correct weighted
+  FWL projection for N > 1 dimensions; iterative alternating projections are
+  needed but not yet implemented).
+
+### Survey Degrees of Freedom
+
+- **Reference**: Korn & Graubard (1990) "Simultaneous Testing of Regression
+  Coefficients with Complex Survey Data", JASA 85(409).
+- **Formula**: `df = n_PSU - n_strata` (replaces `n - k` for t-distribution
+  inference)
+- **Deviation from R:** Some software uses Satterthwaite-type df approximation;
+  we use the simpler and more common `n_PSU - n_strata` convention.
+- **Note:** When no explicit PSU is specified (weights-only or stratified-no-PSU
+  designs), each observation is treated as its own PSU for df purposes. Survey df
+  becomes `n_obs - n_strata` (or `n_obs - 1` when unstratified).
+- **Note:** When survey_design specifies weights only (no PSU) and cluster=
+  is specified, cluster IDs are injected as effective PSUs for Taylor Series
+  Linearization variance estimation, matching the R `survey` package
+  convention that clusters are the primary sampling units.
+
+---
+
 # Version History
 
+- **v1.1** (2026-03-20): Added Survey Data Support section
 - **v1.0** (2025-01-19): Initial registry with 12 estimators
