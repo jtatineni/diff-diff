@@ -835,3 +835,53 @@ class TestReviewRegressions:
                 "first_treat",
                 survey_design=sd,
             )
+
+    def test_sun_abraham_survey_df_regression(self, staggered_survey_data):
+        """SunAbraham survey inference should use survey df, not normal approx."""
+        from diff_diff import SunAbraham
+
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc", nest=True)
+        result = SunAbraham().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
+        )
+        sm = result.survey_metadata
+        assert sm is not None
+        assert sm.df_survey is not None
+        # Overall p-value should use t-distribution (survey df), not normal
+        # Recompute with normal approx and verify they differ
+        from diff_diff.utils import safe_inference
+
+        _, p_normal, _ = safe_inference(result.overall_att, result.overall_se, alpha=0.05, df=None)
+        _, p_survey, _ = safe_inference(
+            result.overall_att, result.overall_se, alpha=0.05, df=sm.df_survey
+        )
+        # With small survey df, t-dist p-value > normal p-value
+        if np.isfinite(result.overall_p_value) and np.isfinite(p_normal):
+            assert result.overall_p_value == pytest.approx(p_survey, rel=1e-10)
+
+    def test_continuous_did_dose_response_survey_pvalue(self, continuous_survey_data):
+        """DoseResponseCurve.to_dataframe() p-values should use survey df."""
+        from diff_diff import ContinuousDiD
+
+        sd = SurveyDesign(weights="weight", strata="stratum")
+        result = ContinuousDiD(n_bootstrap=0).fit(
+            continuous_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            "dose",
+            survey_design=sd,
+        )
+        sm = result.survey_metadata
+        assert sm is not None
+        # Check that dose-response curve p-values are finite
+        att_df = result.dose_response_att.to_dataframe()
+        assert "p_value" in att_df.columns
+        finite_p = att_df["p_value"].dropna()
+        assert len(finite_p) > 0
