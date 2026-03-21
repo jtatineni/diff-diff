@@ -3189,3 +3189,72 @@ class TestRound21Fixes:
                 absorb=["unit"],
                 fixed_effects=["region"],
             )
+
+
+class TestRound23Fixes:
+    """TWFE: no-PSU survey path when cluster=None."""
+
+    def test_twfe_weights_only_no_cluster_uses_no_psu_path(self, twfe_panel_data):
+        """Weights-only survey with cluster=None uses implicit per-obs PSUs."""
+        df = twfe_panel_data
+        n_obs = len(df)
+        twfe = TwoWayFixedEffects()
+        result = twfe.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit",
+            survey_design=SurveyDesign(weights="weight"),
+        )
+        assert result.survey_metadata is not None
+        assert result.survey_metadata.n_psu == n_obs
+        assert result.survey_metadata.df_survey == n_obs - 1
+
+    def test_twfe_stratified_no_psu_no_cluster(self, twfe_panel_data):
+        """Stratified survey with no PSU and cluster=None uses n_obs - n_strata df."""
+        df = twfe_panel_data
+        n_obs = len(df)
+        n_strata = df["stratum"].nunique()
+        twfe = TwoWayFixedEffects()
+        result = twfe.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit",
+            survey_design=SurveyDesign(weights="weight", strata="stratum"),
+        )
+        assert result.survey_metadata is not None
+        assert result.survey_metadata.df_survey == n_obs - n_strata
+
+    def test_twfe_explicit_cluster_still_injects_psu(self, twfe_panel_data):
+        """Explicit cluster= still injects cluster IDs as PSUs."""
+        df = twfe_panel_data
+        n_units = df["unit"].nunique()
+        twfe = TwoWayFixedEffects(cluster="unit")
+        result = twfe.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit",
+            survey_design=SurveyDesign(weights="weight"),
+        )
+        assert result.survey_metadata is not None
+        assert result.survey_metadata.n_psu == n_units
+
+    def test_twfe_non_survey_default_clustering_unaffected(self, twfe_panel_data):
+        """Non-survey TWFE still uses unit-level clustering by default."""
+        df = twfe_panel_data
+        twfe = TwoWayFixedEffects()
+        result = twfe.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit",
+        )
+        assert result is not None
+        assert np.isfinite(result.se)
+        assert result.se > 0

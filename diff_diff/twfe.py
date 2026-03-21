@@ -175,10 +175,18 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             resolved_survey, cluster_ids, self.cluster
         )
 
+        # For survey variance: only inject user-explicit cluster as PSU.
+        # TWFE's default unit clustering should not override the documented
+        # no-PSU survey path (implicit per-observation PSUs).
+        if resolved_survey is not None and self.cluster is None:
+            survey_cluster_ids = None
+        else:
+            survey_cluster_ids = effective_cluster_ids
+
         # Inject cluster as effective PSU for survey variance estimation
-        if resolved_survey is not None and effective_cluster_ids is not None:
+        if resolved_survey is not None and survey_cluster_ids is not None:
             from diff_diff.survey import _inject_cluster_as_psu, compute_survey_metadata
-            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, survey_cluster_ids)
             if resolved_survey.psu is not None and survey_metadata is not None:
                 raw_w = data[survey_design.weights].values.astype(np.float64) if survey_design.weights else np.ones(len(data), dtype=np.float64)
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
@@ -191,7 +199,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             reg = LinearRegression(
                 include_intercept=False,
                 robust=True,
-                cluster_ids=effective_cluster_ids if self.inference != "wild_bootstrap" else None,
+                cluster_ids=survey_cluster_ids if self.inference != "wild_bootstrap" else None,
                 alpha=self.alpha,
                 rank_deficient_action="error",
                 weights=survey_weights,
@@ -206,7 +214,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                     include_intercept=False,
                     robust=True,
                     cluster_ids=(
-                        effective_cluster_ids if self.inference != "wild_bootstrap" else None
+                        survey_cluster_ids if self.inference != "wild_bootstrap" else None
                     ),
                     alpha=self.alpha,
                     rank_deficient_action="silent",
