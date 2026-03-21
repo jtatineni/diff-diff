@@ -75,6 +75,16 @@ class EfficientDiDResults:
         Stored EIF matrix for bootstrap / manual SE computation.
     bootstrap_results : EDiDBootstrapResults, optional
         Bootstrap inference results.
+    estimation_path : str
+        ``"nocov"`` or ``"dr"`` — which estimation path was used.
+    sieve_k_max : int or None
+        Maximum polynomial degree for sieve ratio estimation.
+    sieve_criterion : str
+        Information criterion used (``"aic"`` or ``"bic"``).
+    ratio_clip : float
+        Clipping bound for sieve propensity ratios.
+    kernel_bandwidth : float or None
+        Bandwidth used for kernel-smoothed conditional Omega*.
     """
 
     group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]]

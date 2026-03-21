@@ -340,6 +340,15 @@ def estimate_inverse_propensity_sieve(
             best_ic = ic_val
             best_s = s_hat.copy()
 
+    # Warn if no sieve fit succeeded (falling back to unconditional)
+    if best_ic == np.inf:
+        warnings.warn(
+            "Inverse propensity sieve estimation failed for all K values. "
+            "Falling back to unconditional n/n_group scaling.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     # s = 1/p must be >= 1 (since p <= 1) and bounded above
     best_s = np.clip(best_s, 1.0, float(n_units))
     return best_s
