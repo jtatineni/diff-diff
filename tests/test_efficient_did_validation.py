@@ -142,10 +142,28 @@ def _compute_es_avg(result):
     return np.mean(list(es.values()))
 
 
-# Ground truth ES_avg for Compustat DGP (see plan for derivation)
-_TRUE_ES_AVG_COMPUSTAT = np.mean(
-    [0.1235, 0.247, 0.3705, 0.494, 0.770, 0.924, 1.078]
-)
+# Ground truth derived from DGP parameters (not hard-coded)
+_ATT_COEFS = {5: 0.154, 8: 0.093}  # ATT(g,t) = coef * (t - g + 1) for t >= g
+_N_PERIODS = 11
+
+
+def _true_es_avg_from_dgp():
+    """Derive ES_avg from DGP treatment effect parameters."""
+    max_e = {g: _N_PERIODS - g for g in _ATT_COEFS}
+    all_e = range(0, max(max_e.values()) + 1)
+    es_values = []
+    for e in all_e:
+        contributing = [
+            coef * (e + 1)
+            for g, coef in _ATT_COEFS.items()
+            if e <= max_e[g]
+        ]
+        if contributing:
+            es_values.append(np.mean(contributing))
+    return np.mean(es_values)
+
+
+_TRUE_ES_AVG_COMPUSTAT = _true_es_avg_from_dgp()
 
 
 def _true_overall_att_compustat():
@@ -226,24 +244,26 @@ class TestHRSReplication:
     """Validate EDiD against Table 6 of Chen, Sant'Anna & Xie (2025)."""
 
     def test_sample_selection_yields_expected_counts(self, hrs_data):
+        # Fixture is deterministic — assert exact counts
         n_units = hrs_data["unit"].nunique()
-        assert abs(n_units - 652) <= 10, f"Expected ~652 units, got {n_units}"
+        assert n_units == 656, f"Expected 656 units, got {n_units}"
 
         groups = hrs_data.groupby("unit")["first_treat"].first()
 
-        # Check 4 groups exist
         finite_groups = sorted(g for g in groups.unique() if np.isfinite(g))
         assert finite_groups == [8, 9, 10], f"Expected groups [8,9,10], got {finite_groups}"
         assert any(np.isinf(g) for g in groups.unique()), "Missing never-treated group"
 
-        # Check approximate sizes
-        for g, expected in [(8, 252), (9, 176), (10, 163)]:
+        expected_sizes = {8: 252, 9: 176, 10: 163}
+        for g, expected in expected_sizes.items():
             actual = (groups == g).sum()
-            assert abs(actual - expected) <= 15, (
-                f"G={g}: expected ~{expected}, got {actual}"
-            )
+            assert actual == expected, f"G={g}: expected {expected}, got {actual}"
         n_inf = groups.apply(np.isinf).sum()
-        assert abs(n_inf - 65) <= 10, f"G=inf: expected ~65, got {n_inf}"
+        assert n_inf == 65, f"G=inf: expected 65, got {n_inf}"
+
+        assert sorted(hrs_data["time"].unique()) == [7, 8, 9, 10], (
+            f"Expected waves [7,8,9,10], got {sorted(hrs_data['time'].unique())}"
+        )
 
     def test_group_time_effects_match_table6(self, edid_hrs_result):
         for (g, t), (expected_effect, _) in TABLE6_EDID.items():
