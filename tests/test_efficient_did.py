@@ -1191,6 +1191,32 @@ class TestCovariateValidation:
             EfficientDiD(ratio_clip=0.5)
         with pytest.raises(ValueError, match="ratio_clip"):
             EfficientDiD(ratio_clip=1.0)
+        with pytest.raises(ValueError, match="ratio_clip"):
+            EfficientDiD(ratio_clip=np.nan)
+        with pytest.raises(ValueError, match="ratio_clip"):
+            EfficientDiD(ratio_clip=np.inf)
+
+    def test_kernel_bandwidth_validation(self):
+        with pytest.raises(ValueError, match="kernel_bandwidth"):
+            EfficientDiD(kernel_bandwidth=0.0)
+        with pytest.raises(ValueError, match="kernel_bandwidth"):
+            EfficientDiD(kernel_bandwidth=-1.0)
+        with pytest.raises(ValueError, match="kernel_bandwidth"):
+            EfficientDiD(kernel_bandwidth=np.nan)
+        with pytest.raises(ValueError, match="kernel_bandwidth"):
+            EfficientDiD(kernel_bandwidth=np.inf)
+        # None is valid (auto bandwidth)
+        edid = EfficientDiD(kernel_bandwidth=None)
+        assert edid.kernel_bandwidth is None
+
+    def test_sieve_k_max_validation(self):
+        with pytest.raises(ValueError, match="sieve_k_max"):
+            EfficientDiD(sieve_k_max=0)
+        with pytest.raises(ValueError, match="sieve_k_max"):
+            EfficientDiD(sieve_k_max=-1)
+        # None is valid (auto)
+        edid = EfficientDiD(sieve_k_max=None)
+        assert edid.sieve_k_max is None
 
     def test_sieve_criterion_validation(self):
         with pytest.raises(ValueError, match="sieve_criterion"):

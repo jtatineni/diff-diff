@@ -146,8 +146,20 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             raise ValueError(
                 f"sieve_criterion must be 'aic' or 'bic', got '{self.sieve_criterion}'"
             )
-        if self.ratio_clip <= 1.0:
-            raise ValueError(f"ratio_clip must be > 1.0, got {self.ratio_clip}")
+        if not (np.isfinite(self.ratio_clip) and self.ratio_clip > 1.0):
+            raise ValueError(f"ratio_clip must be finite and > 1.0, got {self.ratio_clip}")
+        if self.kernel_bandwidth is not None:
+            if not (np.isfinite(self.kernel_bandwidth) and self.kernel_bandwidth > 0):
+                raise ValueError(
+                    f"kernel_bandwidth must be finite and > 0 (or None for auto), "
+                    f"got {self.kernel_bandwidth}"
+                )
+        if self.sieve_k_max is not None:
+            if not (isinstance(self.sieve_k_max, (int, np.integer)) and self.sieve_k_max > 0):
+                raise ValueError(
+                    f"sieve_k_max must be a positive integer (or None for auto), "
+                    f"got {self.sieve_k_max}"
+                )
 
     # -- sklearn compatibility ------------------------------------------------
 
