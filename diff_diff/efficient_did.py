@@ -429,17 +429,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         # by taking the first observation per unit (balanced panel, so
         # weights should be constant within unit).
         unit_level_weights: Optional[np.ndarray] = None
-        if survey_weights is not None:
-            # survey_weights is obs-level from _resolve_survey_for_fit
-            # Build a unit-level weight vector aligned with all_units ordering
-            w_col = survey_design.weights if survey_design.weights else None
-            if w_col is not None:
-                w_series = df.groupby(unit)[w_col].first()
-            else:
-                w_series = pd.Series(1.0, index=df[unit].unique())
-            # Normalize unit-level weights (sum = n_units)
-            raw_unit_w = w_series.reindex(all_units).values.astype(float)
-            unit_level_weights = raw_unit_w * (n_units / np.sum(raw_unit_w))
+        if resolved_survey is not None:
+            # Use the resolved survey's weights (already normalized per weight_type)
+            # subset to unit level via _unit_first_panel_row (aligned to all_units)
+            unit_level_weights = self._unit_resolved_survey.weights
 
         cohort_fractions: Dict[float, float] = {}
         if unit_level_weights is not None:

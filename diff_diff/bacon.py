@@ -690,8 +690,11 @@ class BaconDecomposition:
         within-group variance of the treatment indicator.
         """
         n_total_obs = len(df)
-        w = weights if weights is not None else np.ones(n_total_obs)
-        w_total = np.sum(w)
+        w_arr = weights if weights is not None else np.ones(n_total_obs)
+        # Store weights as a column for safe label-based subsetting
+        df = df.copy()
+        df["_sw"] = w_arr
+        w_total = np.sum(w_arr)
         n_total_units = df[unit].nunique()
 
         for comp in comparisons:
@@ -742,7 +745,7 @@ class BaconDecomposition:
                 continue
 
             # Weighted observation counts for the 2x2 sample
-            w_22 = w[df_22.index]
+            w_22 = df_22["_sw"].values
             w_22_sum = np.sum(w_22)
 
             # Sample share of this comparison (weighted)
