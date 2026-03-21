@@ -286,7 +286,7 @@ def call_openai(prompt: str, model: str, api_key: str) -> str:
             sys.exit(1)
     except TimeoutError:
         print(
-            "Error: Request timed out (>{DEFAULT_TIMEOUT}s). "
+            f"Error: Request timed out (>{DEFAULT_TIMEOUT}s). "
             "Try a smaller diff or disable --full-registry.",
             file=sys.stderr,
         )

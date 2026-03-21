@@ -142,16 +142,18 @@ Parse the review output to determine the assessment:
 - Look for patterns: `⛔` (Blocker), `⚠️` (Needs changes), `✅` (Looks good)
 - Count severity labels: P0, P1, P2, P3
 
-**If ✅ "Looks good"** (no P0/P1 findings):
+**If no findings at all** (clean review):
 ```
-Review passed. Suggested next steps:
+Review passed with no findings. Suggested next steps:
 - /pre-merge-check — run local pattern checks
 - /submit-pr — commit and open a pull request
 ```
 
-**If ⚠️ or ⛔** (P0/P1 findings exist):
+**If any findings exist** (P0, P1, P2, or P3):
 
-Use AskUserQuestion:
+Use AskUserQuestion. Tailor the summary and recommendation to the severity:
+
+For ⚠️ or ⛔ (P0/P1 findings):
 ```
 The review found issues that need attention:
 - N P0 finding(s) (blockers)
@@ -164,15 +166,23 @@ Options:
 3. Skip — I'll address these manually
 ```
 
-**If user selects option 1**: Parse the "Path to Approval" section from the review to
-extract concrete action items. Call `EnterPlanMode` — the review context is already in
-the conversation. In plan mode, write a plan addressing each P0/P1 finding with:
-- The finding text and file location from the review
-- The specific fix required
-- Testing approach
+For ✅ with P2/P3 findings only:
+```
+Review passed (no P0/P1 blockers), but there are minor findings:
+- N P2 finding(s)
+- N P3 finding(s) (informational)
 
-After the plan is implemented and changes are committed, the user re-runs
-`/ai-review-local` for a follow-up review.
+Options:
+1. Address P2 findings before submitting
+2. Skip — proceed to /pre-merge-check and /submit-pr
+```
+
+**If user chooses to address findings**: Parse the findings from the review output.
+The review context is already in the conversation. Start addressing the findings
+directly — for P0/P1 issues use `EnterPlanMode` for a structured approach; for P2/P3
+issues, fix them directly since they are minor.
+
+After fixes are committed, the user re-runs `/ai-review-local` for a follow-up review.
 
 ### Step 8: Cleanup
 
@@ -209,8 +219,9 @@ rm -f /tmp/ai-review-diff.patch /tmp/ai-review-files.txt /tmp/ai-review-commits.
 
 ## Notes
 
-- This skill does NOT modify project files — it only generates temp files and the
-  review output in `.claude/reviews/` (which is gitignored)
+- This skill does NOT modify source files — it only generates temp files and
+  review artifacts in `.claude/reviews/` (which is gitignored). It may also
+  create a commit if there are uncommitted changes (Step 3).
 - Re-review mode activates automatically when a previous review exists in
   `.claude/reviews/local-review-latest.md`
 - The review criteria are adapted from `.github/codex/prompts/pr_review.md` (same
