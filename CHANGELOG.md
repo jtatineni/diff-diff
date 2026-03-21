@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.4] - 2026-03-21
+
+### Added
+- **Survey/sampling weights support** (`survey_design` parameter) for `DifferenceInDifferences` and `TwoWayFixedEffects`
+  - Taylor-series linearization (TSL) variance estimation with stratified multi-stage designs
+  - Probability weights (pweight), frequency weights (fweight), and analytic weights (aweight)
+  - Finite population correction (FPC) support
+  - PSU-based clustering with lonely PSU handling
+  - New `diff_diff/survey.py` module with `SurveyDesign` and `compute_survey_vcov`
+- **EfficientDiD validation tests** against Chen, Sant'Anna & Xie (2025) using HRS dataset
+  - HRS validation fixture with provenance documentation
+  - Shared DGP helper in `tests/helpers/edid_dgp.py`
+- Simulation-based power analysis for all registry-backed estimators (MDE, sample size, power curves); unregistered estimators supported via custom `data_generator` and `result_extractor`
+
+### Changed
+- Extend power analysis to support all registry-backed estimators with `result_extractor` parameter
+- Update power analysis tutorial with simulation-based features
+- Reject `absorb + fixed_effects` combination (FWL violation) in both survey and non-survey paths
+
+### Fixed
+- TWFE cluster-as-PSU injection for no-PSU survey designs
+- Non-unique PSU labels across strata with `nest=False`
+- FPC validation moved to `compute_survey_vcov` for effective PSU structure
+- Survey HC1 meat formula and weighted rank-deficiency handling
+- Zero-SE inference, full-census FPC, fweight contract corrections
+- Bootstrap+survey fallback in MultiPeriodDiD
+- DDD `_snap_n` floor mismatch and `n_per_cell` suppression scope
+
 ## [2.7.3] - 2026-03-19
 
 ### Added
@@ -923,6 +951,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.7.4]: https://github.com/igerber/diff-diff/compare/v2.7.3...v2.7.4
 [2.7.3]: https://github.com/igerber/diff-diff/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/igerber/diff-diff/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/igerber/diff-diff/compare/v2.7.0...v2.7.1
