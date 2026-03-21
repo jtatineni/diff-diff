@@ -19,10 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **EfficientDiD validation tests** against Chen, Sant'Anna & Xie (2025) using HRS dataset
   - HRS validation fixture with provenance documentation
   - Shared DGP helper in `tests/helpers/edid_dgp.py`
-- Simulation-based power analysis for all estimators (MDE, sample size, power curves)
+- Simulation-based power analysis for all registry-backed estimators (MDE, sample size, power curves); unregistered estimators supported via custom `data_generator` and `result_extractor`
 
 ### Changed
-- Extend power analysis to support all estimators with `result_extractor` parameter
+- Extend power analysis to support all registry-backed estimators with `result_extractor` parameter
 - Update power analysis tutorial with simulation-based features
 - Reject `absorb + fixed_effects` combination (FWL violation) in both survey and non-survey paths
 
