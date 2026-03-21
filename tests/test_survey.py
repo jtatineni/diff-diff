@@ -118,7 +118,8 @@ def multiperiod_data():
     for unit in range(n_units):
         is_treated = unit < n_treated
         stratum = unit // 20  # 3 strata (20 units each)
-        psu = unit // 3  # 20 PSUs globally unique
+        psu_within = (unit % 20) // 5  # 4 PSUs within each stratum
+        psu = stratum * 4 + psu_within  # globally unique PSU ID
         wt = 1.0 + 0.4 * stratum
 
         for t in periods:
@@ -871,21 +872,16 @@ class TestIntegration:
             }
         )
 
-        # Without nest: PSU labels repeat but n_psu counts per-stratum
+        # nest=False rejects repeated PSU labels across strata
         sd_no_nest = SurveyDesign(weights="w", strata="s", psu="psu", nest=False)
-        resolved_no_nest = sd_no_nest.resolve(df)
+        with pytest.raises(ValueError, match="PSU labels.*multiple strata"):
+            sd_no_nest.resolve(df)
 
-        # With nest: PSU 0 in stratum 0 != PSU 0 in stratum 1
+        # nest=True makes them unique: PSU 0 in stratum 0 != PSU 0 in stratum 1
         sd_nest = SurveyDesign(weights="w", strata="s", psu="psu", nest=True)
         resolved_nest = sd_nest.resolve(df)
-
-        # Both should produce 20 PSUs (10 per stratum × 2 strata)
-        # nest=True makes globally unique codes; nest=False counts per-stratum
-        assert resolved_nest.n_psu == 20
-        assert resolved_no_nest.n_psu == 20
-        # df_survey should match: 20 - 2 = 18
-        assert resolved_nest.df_survey == 18
-        assert resolved_no_nest.df_survey == 18
+        assert resolved_nest.n_psu == 20  # 10 per stratum × 2 strata
+        assert resolved_nest.df_survey == 18  # 20 - 2
 
     def test_twfe_with_survey_design(self, twfe_panel_data):
         """TwoWayFixedEffects accepts and uses survey_design."""
@@ -3058,13 +3054,30 @@ class TestRound18Fixes:
 
 
 class TestRound19Fixes:
-    """Tests for PR #218 review round 19: per-stratum PSU counting."""
+    """Tests for PR #218 review round 19: PSU nesting validation."""
 
-    def test_npsu_counts_per_stratum_with_repeated_labels(self):
-        """n_psu counts unique PSUs per stratum, not globally, when labels repeat."""
+    def test_repeated_psu_labels_nest_false_rejected(self):
+        """Repeated PSU labels across strata with nest=False are rejected."""
         n = 40
         strata = np.repeat([0, 1], 20)
-        # PSU IDs 0..9 repeat across both strata
+        psu_raw = np.tile(np.arange(10), 4)[:n]  # labels repeat
+
+        df = pd.DataFrame(
+            {
+                "y": np.ones(n),
+                "w": np.ones(n),
+                "s": strata,
+                "psu": psu_raw,
+            }
+        )
+        sd = SurveyDesign(weights="w", strata="s", psu="psu", nest=False)
+        with pytest.raises(ValueError, match="PSU labels.*multiple strata"):
+            sd.resolve(df)
+
+    def test_repeated_psu_labels_nest_true_accepted(self):
+        """Repeated PSU labels with nest=True produce correct n_psu."""
+        n = 40
+        strata = np.repeat([0, 1], 20)
         psu_raw = np.tile(np.arange(10), 4)[:n]
 
         df = pd.DataFrame(
@@ -3075,15 +3088,25 @@ class TestRound19Fixes:
                 "psu": psu_raw,
             }
         )
-
-        # nest=False with repeated labels: should count 10+10=20 PSUs
-        sd = SurveyDesign(weights="w", strata="s", psu="psu", nest=False)
+        sd = SurveyDesign(weights="w", strata="s", psu="psu", nest=True)
         resolved = sd.resolve(df)
-        assert resolved.n_psu == 20  # 10 per stratum × 2 strata
+        assert resolved.n_psu == 20  # 10 per stratum × 2
         assert resolved.df_survey == 18  # 20 - 2
 
-        # nest=True should give same result
-        sd_nest = SurveyDesign(weights="w", strata="s", psu="psu", nest=True)
-        resolved_nest = sd_nest.resolve(df)
-        assert resolved_nest.n_psu == 20
-        assert resolved_nest.df_survey == 18
+    def test_unique_psu_labels_nest_false_accepted(self):
+        """Globally unique PSU labels with nest=False work correctly."""
+        n = 40
+        strata = np.repeat([0, 1], 20)
+        psu_raw = np.arange(n) // 2  # 20 unique PSUs, no overlap
+
+        df = pd.DataFrame(
+            {
+                "y": np.ones(n),
+                "w": np.ones(n),
+                "s": strata,
+                "psu": psu_raw,
+            }
+        )
+        sd = SurveyDesign(weights="w", strata="s", psu="psu", nest=False)
+        resolved = sd.resolve(df)
+        assert resolved.n_psu == 20

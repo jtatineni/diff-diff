@@ -156,19 +156,24 @@ class SurveyDesign:
                 psu_arr = _factorize_cluster_ids(combined)
             else:
                 psu_arr = _factorize_cluster_ids(psu_raw)
+                # Validate PSU labels are globally unique when nest=False
+                # and strata are present. Repeated labels cause wrong n_psu,
+                # df_survey, and lonely_psu="adjust" global mean.
+                if strata_arr is not None:
+                    seen_psus: set = set()
+                    for h in np.unique(strata_arr):
+                        psu_in_h = set(psu_raw[strata_arr == h])
+                        overlap = seen_psus & psu_in_h
+                        if overlap:
+                            raise ValueError(
+                                f"PSU labels {overlap} appear in multiple strata. "
+                                "Set nest=True in SurveyDesign to make PSU IDs "
+                                "unique within strata, or use globally unique "
+                                "PSU labels."
+                            )
+                        seen_psus |= psu_in_h
 
-            # Count total PSUs: sum of unique PSUs within each stratum.
-            # When nest=True, labels are already globally unique so this
-            # is equivalent to len(np.unique(psu_arr)). When nest=False
-            # with strata, PSU labels may repeat across strata (common in
-            # survey data), so we count per-stratum to get the correct total.
-            if strata_arr is not None and not self.nest:
-                n_psu = sum(
-                    len(np.unique(psu_arr[strata_arr == h]))
-                    for h in np.unique(strata_arr)
-                )
-            else:
-                n_psu = len(np.unique(psu_arr))
+            n_psu = len(np.unique(psu_arr))
 
         # --- FPC ---
         fpc_arr = None
