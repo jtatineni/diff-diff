@@ -1,0 +1,222 @@
+---
+description: Run AI code review locally using OpenAI API before opening a PR
+argument-hint: "[--full-registry] [--model <model>] [--dry-run]"
+---
+
+# Local AI Code Review
+
+Run a structured code review using the OpenAI Chat Completions API. Reviews changes
+against the same methodology criteria used by the CI reviewer, but adapted for local
+pre-PR use. Designed for iterative review/revision cycles before submitting a PR.
+
+## Arguments
+
+`$ARGUMENTS` may contain optional flags:
+- `--full-registry`: Include the entire REGISTRY.md instead of selective sections
+- `--model <name>`: Override the OpenAI model (default: `gpt-5.4`)
+- `--dry-run`: Print the compiled prompt without calling the API
+
+## Constraints
+
+Steps 1-4 are read-only. Step 5 makes a single external API call. Steps 6-8 are
+analysis and cleanup. No project files are modified by this skill.
+
+## Instructions
+
+### Step 1: Parse Arguments
+
+Parse `$ARGUMENTS` for the optional flags listed above. All flags are optional —
+the default behavior (selective registry, gpt-5.4, live API call) requires no arguments.
+
+### Step 2: Validate Prerequisites
+
+Run these checks in parallel:
+
+```bash
+# Check API key is set (never echo/log the actual value)
+test -n "$OPENAI_API_KEY" && echo "API key: set" || echo "API key: MISSING"
+
+# Check script exists
+test -f .claude/scripts/openai_review.py && echo "Script: found" || echo "Script: MISSING"
+```
+
+If the API key is missing (and not `--dry-run`):
+```
+Error: OPENAI_API_KEY is not set.
+
+To set it up:
+1. Get a key from https://platform.openai.com/api-keys
+2. Add to your shell: echo 'export OPENAI_API_KEY=sk-...' >> ~/.zshrc
+3. Reload: source ~/.zshrc
+```
+
+If the script is missing:
+```
+Error: .claude/scripts/openai_review.py not found.
+This file should be checked into the repository.
+```
+
+Ensure the reviews directory exists:
+```bash
+mkdir -p .claude/reviews
+```
+
+### Step 3: Commit Changes and Generate Diff
+
+Determine the base branch:
+```bash
+base_branch=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null | sed 's|origin/||')
+[ -z "$base_branch" ] && base_branch="main"
+```
+
+Check for uncommitted changes (modified, staged, or untracked):
+```bash
+git status --porcelain
+```
+
+If there are uncommitted changes, commit them before proceeding:
+
+1. Show the user what will be committed (the `git status --porcelain` output above)
+2. Stage all changes: `git add -A`
+3. Create a commit with a descriptive message summarizing the changes. Follow the
+   repository's commit message conventions (see recent `git log --oneline`).
+4. Report: "Committed changes: <commit message> (<short sha>)"
+
+If the commit fails (e.g., pre-commit hook), display the error and stop.
+
+Generate diff and metadata:
+```bash
+git diff --unified=5 "${base_branch}...HEAD" > /tmp/ai-review-diff.patch
+git diff --name-status "${base_branch}...HEAD" > /tmp/ai-review-files.txt
+branch_name=$(git branch --show-current)
+git log --oneline "${base_branch}...HEAD" > /tmp/ai-review-commits.txt
+```
+
+If the diff is empty, report:
+```
+No committed changes vs ${base_branch} to review.
+```
+Clean up temp files and stop.
+
+### Step 4: Handle Re-Review State
+
+If `.claude/reviews/local-review-latest.md` exists, preserve it for re-review context:
+```bash
+if [ -f .claude/reviews/local-review-latest.md ]; then
+    cp .claude/reviews/local-review-latest.md .claude/reviews/local-review-previous.md
+    echo "Previous review preserved for re-review context."
+fi
+```
+
+### Step 5: Run the Review Script
+
+Build and run the command. Include `--previous-review` only if the previous review file
+exists from Step 4.
+
+```bash
+python3 .claude/scripts/openai_review.py \
+    --review-criteria .github/codex/prompts/pr_review.md \
+    --registry docs/methodology/REGISTRY.md \
+    --diff /tmp/ai-review-diff.patch \
+    --changed-files /tmp/ai-review-files.txt \
+    --output .claude/reviews/local-review-latest.md \
+    --branch-info "$branch_name" \
+    [--previous-review .claude/reviews/local-review-previous.md] \
+    [--full-registry] \
+    [--model <model>] \
+    [--dry-run]
+```
+
+If `--dry-run`: display the prompt output and stop. Report the estimated token count
+and model that would be used.
+
+If the script exits non-zero, display the error output and stop.
+
+### Step 6: Display the Review
+
+Read and display the full contents of `.claude/reviews/local-review-latest.md`.
+
+### Step 7: Offer Next Steps Based on Assessment
+
+Parse the review output to determine the assessment:
+- Look for patterns: `⛔` (Blocker), `⚠️` (Needs changes), `✅` (Looks good)
+- Count severity labels: P0, P1, P2, P3
+
+**If ✅ "Looks good"** (no P0/P1 findings):
+```
+Review passed. Suggested next steps:
+- /pre-merge-check — run local pattern checks
+- /submit-pr — commit and open a pull request
+```
+
+**If ⚠️ or ⛔** (P0/P1 findings exist):
+
+Use AskUserQuestion:
+```
+The review found issues that need attention:
+- N P0 finding(s) (blockers)
+- N P1 finding(s) (needs changes)
+- N P2/P3 finding(s) (minor/informational)
+
+Options:
+1. Enter plan mode to address findings (Recommended)
+2. Re-run with --full-registry for deeper methodology context
+3. Skip — I'll address these manually
+```
+
+**If user selects option 1**: Parse the "Path to Approval" section from the review to
+extract concrete action items. Call `EnterPlanMode` — the review context is already in
+the conversation. In plan mode, write a plan addressing each P0/P1 finding with:
+- The finding text and file location from the review
+- The specific fix required
+- Testing approach
+
+After the plan is implemented and changes are committed, the user re-runs
+`/ai-review-local` for a follow-up review.
+
+### Step 8: Cleanup
+
+```bash
+rm -f /tmp/ai-review-diff.patch /tmp/ai-review-files.txt /tmp/ai-review-commits.txt
+```
+
+## Error Handling
+
+| Scenario | Response |
+|---|---|
+| `OPENAI_API_KEY` not set (non-dry-run) | Error with setup instructions (see Step 2) |
+| Script file missing | Error suggesting it should be checked in |
+| No committed changes | Clean exit with message |
+| Script exits non-zero | Display stderr output from script |
+| Previous review file missing on re-run | Script warns and continues as fresh review |
+| User aborts due to uncommitted changes | Clean exit |
+
+## Examples
+
+```bash
+# Standard review of current branch vs main
+/ai-review-local
+
+# Review with full methodology registry
+/ai-review-local --full-registry
+
+# Preview the compiled prompt without calling the API
+/ai-review-local --dry-run
+
+# Use a different model
+/ai-review-local --model gpt-4.1
+```
+
+## Notes
+
+- This skill does NOT modify project files — it only generates temp files and the
+  review output in `.claude/reviews/` (which is gitignored)
+- Re-review mode activates automatically when a previous review exists in
+  `.claude/reviews/local-review-latest.md`
+- The review criteria are adapted from `.github/codex/prompts/pr_review.md` (same
+  methodology axes, severity levels, and anti-patterns) but framed for local
+  code-change review rather than PR review
+- The CI review (Codex action with full repo access) remains the authoritative final
+  check — local review is a fast first pass to catch most issues early
+- This skill pairs naturally with the iterative workflow:
+  `/ai-review-local` -> address findings -> `/ai-review-local` -> `/submit-pr`
