@@ -133,6 +133,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         self.kernel_bandwidth = kernel_bandwidth
         self.is_fitted_ = False
         self.results_: Optional[EfficientDiDResults] = None
+        self._survey_se_ctx: Optional[tuple] = None
         self._validate_params()
 
     def _validate_params(self) -> None:
@@ -204,6 +205,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         covariates: Optional[List[str]] = None,
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
+        survey_design: Optional[Any] = None,
     ) -> EfficientDiDResults:
         """Fit the Efficient DiD estimator.
 
@@ -229,6 +231,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             ``"all"``.
         balance_e : int, optional
             Balance event study at this relative period.
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference.
+            Applies survey weights to all means, covariances, and cohort
+            fractions, and uses Taylor Series Linearization for SE
+            estimation.
 
         Returns
         -------
@@ -239,8 +246,25 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         ValueError
             Missing columns, unbalanced panel, non-absorbing treatment,
             or PT-Post without a never-treated group.
+        NotImplementedError
+            If ``n_bootstrap > 0`` with ``survey_design``.
         """
         self._validate_params()
+
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Guard bootstrap + survey
+        if self.n_bootstrap > 0 and resolved_survey is not None:
+            raise NotImplementedError(
+                "Multiplier bootstrap with survey weights is not yet supported "
+                "for EfficientDiD. Use analytical inference (n_bootstrap=0) with "
+                "survey_design for design-based standard errors."
+            )
 
         # Normalize empty covariates list to None (use nocov path)
         if covariates is not None and len(covariates) == 0:
@@ -350,10 +374,37 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         never_treated_mask = unit_cohorts == 0
         cohort_masks[np.inf] = never_treated_mask  # also keyed by inf sentinel
 
+        # ----- Unit-level survey weights -----
+        # Survey weights in the panel are at obs level (unit x time).
+        # EfficientDiD works at unit level.  Extract one weight per unit
+        # by taking the first observation per unit (balanced panel, so
+        # weights should be constant within unit).
+        unit_level_weights: Optional[np.ndarray] = None
+        if survey_weights is not None:
+            # survey_weights is obs-level from _resolve_survey_for_fit
+            # Build a unit-level weight vector aligned with all_units ordering
+            w_col = survey_design.weights if survey_design.weights else None
+            if w_col is not None:
+                w_series = df.groupby(unit)[w_col].first()
+            else:
+                w_series = pd.Series(1.0, index=df[unit].unique())
+            # Normalize unit-level weights (sum = n_units)
+            raw_unit_w = w_series.reindex(all_units).values.astype(float)
+            unit_level_weights = raw_unit_w * (n_units / np.sum(raw_unit_w))
+
         cohort_fractions: Dict[float, float] = {}
-        for g in treatment_groups:
-            cohort_fractions[g] = float(np.sum(cohort_masks[g])) / n_units
-        cohort_fractions[np.inf] = float(np.sum(never_treated_mask)) / n_units
+        if unit_level_weights is not None:
+            # Survey-weighted cohort fractions: sum(w_i for i in cohort) / sum(w_i)
+            total_w = float(np.sum(unit_level_weights))
+            for g in treatment_groups:
+                cohort_fractions[g] = float(np.sum(unit_level_weights[cohort_masks[g]])) / total_w
+            cohort_fractions[np.inf] = (
+                float(np.sum(unit_level_weights[never_treated_mask])) / total_w
+            )
+        else:
+            for g in treatment_groups:
+                cohort_fractions[g] = float(np.sum(cohort_masks[g])) / n_units
+            cohort_fractions[np.inf] = float(np.sum(never_treated_mask)) / n_units
 
         # ----- Covariate preparation (if provided) -----
         covariate_matrix: Optional[np.ndarray] = None
@@ -582,6 +633,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         period_to_col=period_to_col,
                         period_1_col=effective_p1_col,
                         cohort_fractions=cohort_fractions,
+                        unit_weights=unit_level_weights,
                     )
 
                     weights, _, cond_num = compute_efficient_weights(omega)
@@ -598,6 +650,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         never_treated_mask=never_treated_mask,
                         period_to_col=period_to_col,
                         period_1_col=effective_p1_col,
+                        unit_weights=unit_level_weights,
                     )
 
                     att_gt = float(weights @ y_hat) if len(weights) > 0 else np.nan
@@ -614,11 +667,23 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         period_1_col=effective_p1_col,
                         cohort_fractions=cohort_fractions,
                         n_units=n_units,
+                        unit_weights=unit_level_weights,
                     )
                     eif_by_gt[(g, t)] = eif_vals
 
                 # Analytical SE = sqrt(mean(EIF^2) / n)  [paper p.21]
-                se_gt = float(np.sqrt(np.mean(eif_vals**2) / n_units))
+                # With survey: use TSL variance via compute_survey_vcov
+                if resolved_survey is not None:
+                    se_gt = self._compute_survey_eif_se(
+                        eif_vals,
+                        resolved_survey,
+                        df,
+                        unit,
+                        all_units,
+                        time_periods,
+                    )
+                else:
+                    se_gt = float(np.sqrt(np.mean(eif_vals**2) / n_units))
 
                 t_stat, p_val, ci = safe_inference(att_gt, se_gt, alpha=self.alpha)
 
@@ -637,6 +702,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 "Could not estimate any group-time effects. "
                 "Check data has sufficient observations."
             )
+
+        # ----- Store survey context for aggregation SE helpers -----
+        # Temporarily store survey context for use in aggregation helpers.
+        # This avoids threading survey args through the deeply nested
+        # aggregation methods that are also used by the bootstrap mixin.
+        self._survey_se_ctx = (
+            (resolved_survey, df, unit, all_units, time_periods)
+            if resolved_survey is not None
+            else None
+        )
 
         # ----- Aggregation -----
         overall_att, overall_se = self._aggregate_overall(
@@ -667,6 +742,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 treatment_groups,
                 unit_cohorts=unit_cohorts,
             )
+
+        # Clean up temporary survey context
+        self._survey_se_ctx = None
 
         # ----- Bootstrap -----
         bootstrap_results = None
@@ -761,9 +839,64 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             sieve_criterion=self.sieve_criterion,
             ratio_clip=self.ratio_clip,
             kernel_bandwidth=self.kernel_bandwidth,
+            survey_metadata=survey_metadata,
         )
         self.is_fitted_ = True
         return self.results_
+
+    # -- Survey SE helpers ----------------------------------------------------
+
+    def _compute_survey_eif_se(
+        self,
+        eif_vals: np.ndarray,
+        resolved_survey: Any,
+        df: pd.DataFrame,
+        unit_col: str,
+        all_units: list,
+        time_periods: list,
+    ) -> float:
+        """Compute SE from EIF scores using Taylor Series Linearization.
+
+        The EIF is at unit level (shape n_units).  To use
+        ``compute_survey_vcov``, we need to expand the EIF back to the
+        obs-level panel (unit x time) and build a resolved survey at
+        panel level.  ``compute_survey_vcov`` expects ``X`` and
+        ``residuals`` — we pass ``X = ones(n_obs, 1)`` and
+        ``residuals = eif_expanded`` so that the sandwich gives
+        ``Var(mean(EIF))`` under the survey design.
+        """
+        from diff_diff.survey import compute_survey_vcov
+
+        n_periods = len(time_periods)
+
+        # Expand EIF from unit-level to panel-level (repeat each unit's
+        # EIF across its time periods)
+        eif_expanded = np.repeat(eif_vals, n_periods)
+
+        # X = column of ones (we want Var of the mean)
+        X_ones = np.ones((len(eif_expanded), 1))
+
+        vcov = compute_survey_vcov(X_ones, eif_expanded, resolved_survey)
+        se = float(np.sqrt(np.abs(vcov[0, 0])))
+        return se
+
+    def _eif_se(self, eif_vals: np.ndarray, n_units: int) -> float:
+        """Compute SE from aggregated EIF scores.
+
+        Dispatches to survey TSL when ``_survey_se_ctx`` is set (during
+        fit), otherwise uses the standard analytical formula.
+        """
+        if self._survey_se_ctx is not None:
+            resolved_survey, df, unit_col, all_units, time_periods = self._survey_se_ctx
+            return self._compute_survey_eif_se(
+                eif_vals,
+                resolved_survey,
+                df,
+                unit_col,
+                all_units,
+                time_periods,
+            )
+        return float(np.sqrt(np.mean(eif_vals**2) / n_units))
 
     # -- Aggregation helpers --------------------------------------------------
 
@@ -869,7 +1002,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         agg_eif_total = agg_eif + wif  # both O(1) scale
 
         # SE = sqrt(mean(EIF^2) / n) — standard IF-based SE
-        se = float(np.sqrt(np.mean(agg_eif_total**2) / n_units))
+        # (dispatches to survey TSL when survey context is active)
+        se = self._eif_se(agg_eif_total, n_units)
 
         return overall_att, se
 
@@ -961,7 +1095,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 )
                 agg_eif = agg_eif + wif
 
-            agg_se = float(np.sqrt(np.mean(agg_eif**2) / n_units))
+            agg_se = self._eif_se(agg_eif, n_units)
 
             t_stat, p_val, ci = safe_inference(agg_eff, agg_se, alpha=self.alpha)
             result[e] = {
@@ -1021,7 +1155,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             agg_eif = np.zeros(n_units)
             for k, gt in enumerate(g_gts):
                 agg_eif += w[k] * eif_by_gt[gt]
-            agg_se = float(np.sqrt(np.mean(agg_eif**2) / n_units))
+            agg_se = self._eif_se(agg_eif, n_units)
 
             t_stat, p_val, ci = safe_inference(agg_eff, agg_se, alpha=self.alpha)
             result[g] = {

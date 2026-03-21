@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats
-from diff_diff.linalg import LinearRegression, compute_robust_vcov
+from diff_diff.linalg import LinearRegression
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     safe_inference,
@@ -83,6 +83,8 @@ class SunAbrahamResults:
     cohort_effects: Optional[Dict[Tuple[Any, int], Dict[str, Any]]] = field(
         default=None, repr=False
     )
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -125,6 +127,27 @@ class SunAbrahamResults:
             f"{'Control group:':<30} {self.control_group:>10}",
             "",
         ]
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(
+                [
+                    "-" * 85,
+                    "Survey Design".center(85),
+                    "-" * 85,
+                    f"{'Weight type:':<30} {sm.weight_type:>10}",
+                ]
+            )
+            if sm.n_strata is not None:
+                lines.append(f"{'Strata:':<30} {sm.n_strata:>10}")
+            if sm.n_psu is not None:
+                lines.append(f"{'PSU/Cluster:':<30} {sm.n_psu:>10}")
+            lines.append(f"{'Effective sample size:':<30} {sm.effective_n:>10.1f}")
+            lines.append(f"{'Design effect (DEFF):':<30} {sm.design_effect:>10.2f}")
+            if sm.df_survey is not None:
+                lines.append(f"{'Survey d.f.:':<30} {sm.df_survey:>10}")
+            lines.extend(["-" * 85, ""])
 
         # Overall ATT
         lines.extend(
@@ -434,6 +457,7 @@ class SunAbraham:
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
+        survey_design: object = None,
     ) -> SunAbrahamResults:
         """
         Fit the Sun-Abraham estimator using saturated regression.
@@ -453,6 +477,10 @@ class SunAbraham:
             Use 0 (or np.inf) for never-treated units.
         covariates : list, optional
             List of covariate column names to include in regression.
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference.
+            Supports weighted estimation and Taylor series linearization
+            variance with strata, PSU, and FPC.
 
         Returns
         -------
@@ -472,6 +500,21 @@ class SunAbraham:
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Missing columns: {missing}")
+
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Reject bootstrap + survey (pairs bootstrap with survey weights needs Phase 5)
+        if self.n_bootstrap > 0 and resolved_survey is not None:
+            raise NotImplementedError(
+                "Bootstrap inference with survey weights is not yet supported "
+                "for SunAbraham. Use analytical inference (n_bootstrap=0) with "
+                "survey_design for design-based standard errors."
+            )
 
         # Create working copy
         df = data.copy()
@@ -544,6 +587,23 @@ class SunAbraham:
             # Keep all units (not_yet_treated will be handled by the regression)
             df_reg = df.copy()
 
+        # Resolve effective cluster and inject cluster-as-PSU
+        cluster_ids_raw = df_reg[cluster_var].values if cluster_var in df_reg.columns else None
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids_raw, cluster_var if self.cluster is not None else None
+        )
+        if resolved_survey is not None and effective_cluster_ids is not None:
+            from diff_diff.survey import _inject_cluster_as_psu, compute_survey_metadata
+
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+            if resolved_survey.psu is not None and survey_metadata is not None:
+                raw_w = (
+                    data[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(data), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
         # Fit saturated regression
         (
             cohort_effects,
@@ -560,6 +620,9 @@ class SunAbraham:
             rel_periods_to_estimate,
             covariates,
             cluster_var,
+            survey_weights=survey_weights,
+            survey_weight_type=survey_weight_type,
+            resolved_survey=resolved_survey,
         )
 
         # Compute interaction-weighted event study effects
@@ -652,6 +715,7 @@ class SunAbraham:
             control_group=self.control_group,
             bootstrap_results=bootstrap_results,
             cohort_effects=cohort_effects_storage,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -668,6 +732,9 @@ class SunAbraham:
         rel_periods: List[int],
         covariates: Optional[List[str]],
         cluster_var: str,
+        survey_weights: Optional[np.ndarray] = None,
+        survey_weight_type: str = "pweight",
+        resolved_survey: object = None,
     ) -> Tuple[
         Dict[Tuple[Any, int], float],
         Dict[Tuple[Any, int], float],
@@ -729,7 +796,9 @@ class SunAbraham:
         if covariates:
             variables_to_demean.extend(covariates)
 
-        df_demeaned = self._within_transform(df, variables_to_demean, unit, time)
+        df_demeaned = _within_transform_util(
+            df, variables_to_demean, unit, time, suffix="_dm", weights=survey_weights
+        )
 
         # Build design matrix
         X_cols = [f"{col}_dm" for col in interaction_cols]
@@ -752,9 +821,11 @@ class SunAbraham:
             robust=True,
             cluster_ids=cluster_ids,
             rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
+            survey_design=resolved_survey,
         ).fit(X, y, df_adjustment=df_adj)
 
-        coefficients = reg.coefficients_
         vcov = reg.vcov_
 
         # Extract cohort effects and standard errors using get_inference

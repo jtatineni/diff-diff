@@ -17,6 +17,7 @@ Wing, C., Freedman, S. M., & Hollingsworth, A. (2024). Stacked
     Difference-in-Differences. NBER Working Paper 32054.
 """
 
+import copy
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -167,6 +168,7 @@ class StackedDiD:
         first_treat: str,
         aggregate: Optional[str] = None,
         population: Optional[str] = None,
+        survey_design=None,
     ) -> StackedDiDResults:
         """
         Fit the stacked DiD estimator.
@@ -193,6 +195,10 @@ class StackedDiD:
         population : str, optional
             Column name for population weights. Required only when
             weighting="population".
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference. When
+            provided, uses Taylor Series Linearization for variance
+            estimation and applies sampling weights to the regression.
 
         Returns
         -------
@@ -226,6 +232,24 @@ class StackedDiD:
 
         if self.weighting == "population" and population is None:
             raise ValueError("population column must be specified when weighting='population'")
+
+        # ---- Resolve survey design ----
+        from diff_diff.survey import (
+            SurveyDesign,
+            _resolve_survey_for_fit,
+        )
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Collect survey design column names for propagation through sub-experiments
+        survey_cols: List[str] = []
+        if survey_design is not None and isinstance(survey_design, SurveyDesign):
+            for attr in ("weights", "strata", "psu", "fpc"):
+                col_name = getattr(survey_design, attr, None)
+                if col_name is not None:
+                    survey_cols.append(col_name)
 
         df = data.copy()
         df[time] = pd.to_numeric(df[time])
@@ -263,7 +287,16 @@ class StackedDiD:
         sub_experiments = []
         skipped_events = []
         for a in omega_kappa:
-            sub_exp = self._build_sub_experiment(df, unit_info, a, unit, time, first_treat, outcome)
+            sub_exp = self._build_sub_experiment(
+                df,
+                unit_info,
+                a,
+                unit,
+                time,
+                first_treat,
+                outcome,
+                extra_cols=survey_cols,
+            )
             if sub_exp is not None and len(sub_exp) > 0:
                 sub_experiments.append(sub_exp)
             else:
@@ -331,7 +364,21 @@ class StackedDiD:
 
         # WLS via sqrt(w) transformation
         Q_weights = stacked_df["_Q_weight"].values
-        sqrt_w = np.sqrt(Q_weights)
+        n_stacked = len(stacked_df)
+
+        # Compose Q-weights with survey weights if survey design is present
+        if resolved_survey is not None and survey_weights is not None:
+            # Survey weights were resolved on the original data; the stacked
+            # dataset carries the survey weight column through _build_sub_experiment.
+            # Re-extract from the stacked data so lengths match.
+            survey_weights_stacked = stacked_df[survey_design.weights].values.astype(np.float64)
+            composed_weights = Q_weights * survey_weights_stacked
+            # Normalize composed weights to sum = n_stacked
+            composed_weights = composed_weights * (n_stacked / np.sum(composed_weights))
+        else:
+            composed_weights = Q_weights
+
+        sqrt_w = np.sqrt(composed_weights)
         Y = stacked_df[outcome].values
         Y_t = Y * sqrt_w
         X_t = X * sqrt_w[:, np.newaxis]
@@ -353,6 +400,39 @@ class StackedDiD:
             rank_deficient_action=self.rank_deficient_action,
         )
         assert vcov is not None
+
+        # ---- Survey VCV override (TSL variance) ----
+        if resolved_survey is not None:
+            from diff_diff.survey import (
+                _inject_cluster_as_psu,
+                _resolve_effective_cluster,
+                compute_survey_metadata,
+                compute_survey_vcov,
+            )
+
+            # Re-resolve survey design on the stacked data so that strata/PSU
+            # arrays have the correct length for TSL variance estimation.
+            resolved_stacked = survey_design.resolve(stacked_df)
+
+            # Create a copy with composed weights (normalized to sum=n_stacked)
+            resolved_composed = copy.copy(resolved_stacked)
+            resolved_composed.weights = composed_weights
+
+            # Original-scale residuals for TSL variance
+            resid_orig = Y - X @ coef
+
+            # Inject cluster as PSU when survey design has no explicit PSU
+            resolved_composed = _inject_cluster_as_psu(resolved_composed, cluster_ids)
+
+            # Resolve effective cluster (PSU overrides user-specified cluster)
+            _resolve_effective_cluster(resolved_composed, cluster_ids, self.cluster)
+
+            # Compute TSL variance
+            vcov = compute_survey_vcov(X, resid_orig, resolved_composed)
+
+            # Recompute survey metadata on the stacked resolved design
+            raw_w_stacked = stacked_df[survey_design.weights].values.astype(np.float64)
+            survey_metadata = compute_survey_metadata(resolved_composed, raw_w_stacked)
 
         # ---- Extract event study effects ----
         event_study_effects: Optional[Dict[int, Dict[str, Any]]] = None
@@ -426,6 +506,7 @@ class StackedDiD:
             weighting=self.weighting,
             clean_control=self.clean_control,
             alpha=self.alpha,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -535,6 +616,7 @@ class StackedDiD:
         time: str,
         first_treat: str,
         outcome: str,
+        extra_cols: Optional[List[str]] = None,
     ) -> Optional[pd.DataFrame]:
         """
         Build a single sub-experiment for adoption event a.
@@ -549,6 +631,10 @@ class StackedDiD:
             Adoption event time.
         unit, time, first_treat, outcome : str
             Column names.
+        extra_cols : list of str, optional
+            Additional columns to propagate from the source data into the
+            sub-experiment (e.g., survey design columns: weights, strata,
+            psu, fpc).
 
         Returns
         -------
@@ -816,6 +902,7 @@ def stacked_did(
     kappa_post: int = 1,
     aggregate: Optional[str] = None,
     population: Optional[str] = None,
+    survey_design=None,
     **kwargs: Any,
 ) -> StackedDiDResults:
     """
@@ -843,6 +930,8 @@ def stacked_did(
         Aggregation mode: None, "simple", or "event_study".
     population : str, optional
         Population column for weighting="population".
+    survey_design : SurveyDesign, optional
+        Survey design specification for design-based inference.
     **kwargs
         Additional keyword arguments passed to StackedDiD constructor.
 
@@ -869,4 +958,5 @@ def stacked_did(
         first_treat=first_treat,
         aggregate=aggregate,
         population=population,
+        survey_design=survey_design,
     )
