@@ -224,7 +224,6 @@ __all__ = [
     "BaconDecompositionResults",
     "Comparison2x2",
     "bacon_decompose",
-    "plot_bacon",
     # Results
     "DiDResults",
     "MultiPeriodDiDResults",
@@ -319,14 +318,12 @@ __all__ = [
     "simulate_mde",
     "simulate_power",
     "simulate_sample_size",
-    "plot_power_curve",
     # Pre-trends power analysis
     "PreTrendsPower",
     "PreTrendsPowerResults",
     "PreTrendsPowerCurve",
     "compute_pretrends_power",
     "compute_mdv",
-    "plot_pretrends_power",
     # Survey support
     "SurveyDesign",
     "SurveyMetadata",

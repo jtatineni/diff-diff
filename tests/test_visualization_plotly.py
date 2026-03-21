@@ -300,3 +300,30 @@ class TestTopLevelExports:
             "plot_group_time_heatmap",
         ]:
             assert name in diff_diff.__all__, f"{name} missing from diff_diff.__all__"
+
+    def test_no_duplicates_in_all(self):
+        import diff_diff
+
+        seen = set()
+        for name in diff_diff.__all__:
+            assert name not in seen, f"Duplicate in __all__: {name}"
+            seen.add(name)
+
+
+class TestPlotlyEventStudyHover:
+    """Regression: plotly event study must preserve period labels in hover."""
+
+    def test_string_periods_in_customdata(self):
+        from diff_diff import plot_event_study
+
+        effects = {"pre": 0.0, "post": 0.5}
+        se = {"pre": 0.1, "post": 0.15}
+        fig = plot_event_study(
+            effects=effects, se=se, backend="plotly", show=False
+        )
+        # At least one point trace should have customdata with original labels
+        point_traces = [t for t in fig.data if t.mode == "markers"]
+        assert len(point_traces) > 0
+        for trace in point_traces:
+            assert trace.customdata is not None, "Missing customdata on point trace"
+            assert trace.hovertemplate is not None, "Missing hovertemplate"
