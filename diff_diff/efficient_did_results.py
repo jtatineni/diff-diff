@@ -104,13 +104,15 @@ class EfficientDiDResults:
     )
     influence_functions: Optional["np.ndarray"] = field(default=None, repr=False)
     bootstrap_results: Optional["EDiDBootstrapResults"] = field(default=None, repr=False)
+    estimation_path: str = "nocov"
 
     def __repr__(self) -> str:
         sig = _get_significance_stars(self.overall_p_value)
+        path = "DR" if self.estimation_path == "dr" else "nocov"
         return (
             f"EfficientDiDResults(ATT={self.overall_att:.4f}{sig}, "
             f"SE={self.overall_se:.4f}, "
-            f"pt={self.pt_assumption}, "
+            f"pt={self.pt_assumption}, path={path}, "
             f"n_groups={len(self.groups)}, "
             f"n_periods={len(self.time_periods)})"
         )
@@ -131,6 +133,7 @@ class EfficientDiDResults:
             f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
             f"{'Time periods:':<30} {len(self.time_periods):>10}",
             f"{'PT assumption:':<30} {self.pt_assumption:>10}",
+            f"{'Estimation path:':<30} {'doubly robust' if self.estimation_path == 'dr' else 'no covariates':>10}",
         ]
         if self.anticipation > 0:
             lines.append(f"{'Anticipation periods:':<30} {self.anticipation:>10}")

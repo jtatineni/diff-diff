@@ -2,7 +2,7 @@
 Efficient Difference-in-Differences estimator.
 
 Implements the semiparametrically efficient ATT estimator from
-Chen, Sant'Anna & Xie (2025), Phase 1 (no covariates).
+Chen, Sant'Anna & Xie (2025).
 
 The estimator achieves the efficiency bound by optimally weighting
 across pre-treatment periods and comparison groups via the inverse of
@@ -21,6 +21,13 @@ import pandas as pd
 from diff_diff.efficient_did_bootstrap import (
     EDiDBootstrapResults,
     EfficientDiDBootstrapMixin,
+)
+from diff_diff.efficient_did_covariates import (
+    compute_eif_cov,
+    compute_generated_outcomes_cov,
+    compute_omega_star_cov,
+    estimate_outcome_regression,
+    estimate_propensity_ratio,
 )
 from diff_diff.efficient_did_results import EfficientDiDResults
 from diff_diff.efficient_did_weights import (
@@ -41,8 +48,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
     Achieves the semiparametric efficiency bound for ATT(g,t) in
     difference-in-differences settings with staggered treatment adoption.
-    Phase 1 supports the **no-covariates** path only — a closed-form
-    estimator using within-group sample means and covariances.
+
+    Without covariates, uses a closed-form estimator based on within-group
+    sample means and covariances.  With covariates, uses the doubly robust
+    path: outcome regression via OLS plus propensity score ratios via logit.
 
     Parameters
     ----------
@@ -64,6 +73,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
     anticipation : int, default 0
         Number of anticipation periods (shifts the effective treatment
         boundary forward by this amount).
+    pscore_trim : float, default 0.01
+        Propensity scores are clipped to ``[pscore_trim, 1-pscore_trim]``
+        before ratio computation.  Only used when covariates are provided.
 
     Examples
     --------
@@ -83,6 +95,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
         anticipation: int = 0,
+        pscore_trim: float = 0.01,
     ):
         if cluster is not None:
             raise NotImplementedError(
@@ -96,6 +109,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
         self.anticipation = anticipation
+        self.pscore_trim = pscore_trim
         self.is_fitted_ = False
         self.results_: Optional[EfficientDiDResults] = None
         self._validate_params()
@@ -110,6 +124,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 f"bootstrap_weights must be one of {valid_weights}, "
                 f"got '{self.bootstrap_weights}'"
             )
+        if not (0 < self.pscore_trim < 0.5):
+            raise ValueError(f"pscore_trim must be in (0, 0.5), got {self.pscore_trim}")
 
     # -- sklearn compatibility ------------------------------------------------
 
@@ -123,6 +139,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             "n_bootstrap": self.n_bootstrap,
             "bootstrap_weights": self.bootstrap_weights,
             "seed": self.seed,
+            "pscore_trim": self.pscore_trim,
         }
 
     def set_params(self, **params: Any) -> "EfficientDiD":
@@ -164,7 +181,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             Column indicating first treatment period.
             Use 0 or ``np.inf`` for never-treated units.
         covariates : list of str, optional
-            Not implemented in Phase 1.  Raises ``NotImplementedError``.
+            Column names for time-invariant unit-level covariates.
+            When provided, uses the doubly robust path (outcome regression
+            + propensity score ratios).
         aggregate : str, optional
             ``None``, ``"simple"``, ``"event_study"``, ``"group"``, or
             ``"all"``.
@@ -180,16 +199,13 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         ValueError
             Missing columns, unbalanced panel, non-absorbing treatment,
             or PT-Post without a never-treated group.
-        NotImplementedError
-            If ``covariates`` is provided (Phase 2).
         """
         self._validate_params()
 
-        if covariates is not None:
-            raise NotImplementedError(
-                "Covariates are not yet supported in EfficientDiD (Phase 1). "
-                "The with-covariates path will be added in Phase 2."
-            )
+        # Normalize empty covariates list to None (use nocov path)
+        if covariates is not None and len(covariates) == 0:
+            covariates = None
+        use_covariates = covariates is not None
 
         # ----- Validate inputs -----
         required_cols = [outcome, unit, time, first_treat]
@@ -299,6 +315,45 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             cohort_fractions[g] = float(np.sum(cohort_masks[g])) / n_units
         cohort_fractions[np.inf] = float(np.sum(never_treated_mask)) / n_units
 
+        # ----- Covariate preparation (if provided) -----
+        covariate_matrix: Optional[np.ndarray] = None
+        m_hat_cache: Dict[Tuple, np.ndarray] = {}
+        r_hat_cache: Dict[Tuple[float, float], np.ndarray] = {}
+
+        if use_covariates:
+            assert covariates is not None  # for type narrowing
+
+            # Validate covariate columns exist
+            missing_cov = [c for c in covariates if c not in data.columns]
+            if missing_cov:
+                raise ValueError(f"Missing covariate columns: {missing_cov}")
+
+            # Validate no NaN/Inf in covariates
+            for col_name in covariates:
+                non_finite_cov = ~np.isfinite(pd.to_numeric(df[col_name], errors="coerce"))
+                if non_finite_cov.any():
+                    n_bad = int(non_finite_cov.sum())
+                    raise ValueError(
+                        f"Found {n_bad} non-finite value(s) in covariate column "
+                        f"'{col_name}'. Covariates must be finite."
+                    )
+
+            # Validate time-invariance: covariates must be constant within each unit
+            for col_name in covariates:
+                cov_nunique = df.groupby(unit)[col_name].nunique()
+                varying = cov_nunique[cov_nunique > 1]
+                if len(varying) > 0:
+                    uid = varying.index[0]
+                    raise ValueError(
+                        f"Covariate '{col_name}' varies over time for unit {uid}. "
+                        "EfficientDiD requires time-invariant covariates. "
+                        "Extract base-period values before calling fit()."
+                    )
+
+            # Extract unit-level covariate matrix from period_1 observations
+            base_df = df[df[time] == period_1].set_index(unit).reindex(all_units)
+            covariate_matrix = base_df[list(covariates)].values.astype(float)
+
         # ----- Core estimation: ATT(g, t) for each target -----
         # Precompute per-group unit counts (avoid repeated np.sum in loop)
         n_treated_per_g = {g: int(np.sum(cohort_masks[g])) for g in treatment_groups}
@@ -368,55 +423,129 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     eif_by_gt[(g, t)] = np.zeros(n_units)
                     continue
 
-                # Omega* matrix
-                omega = compute_omega_star_nocov(
-                    target_g=g,
-                    target_t=t,
-                    valid_pairs=pairs,
-                    outcome_wide=outcome_wide,
-                    cohort_masks=cohort_masks,
-                    never_treated_mask=never_treated_mask,
-                    period_to_col=period_to_col,
-                    period_1_col=effective_p1_col,
-                    cohort_fractions=cohort_fractions,
-                )
+                if use_covariates:
+                    assert covariate_matrix is not None
+                    t_col_val = period_to_col[t]
 
-                # Efficient weights (also returns condition number)
-                weights, _, cond_num = compute_efficient_weights(omega)
-                stored_weights[(g, t)] = weights
-                if omega.size > 0:
-                    stored_cond[(g, t)] = cond_num
+                    # Lazily populate nuisance caches for this (g, t)
+                    for gp, tpre in pairs:
+                        tpre_col_val = period_to_col[tpre]
+                        # m_{inf, t, tpre}(X)
+                        key_inf_t = (np.inf, t_col_val, tpre_col_val)
+                        if key_inf_t not in m_hat_cache:
+                            m_hat_cache[key_inf_t] = estimate_outcome_regression(
+                                outcome_wide,
+                                covariate_matrix,
+                                never_treated_mask,
+                                t_col_val,
+                                tpre_col_val,
+                            )
+                        # m_{g', tpre, 1}(X)
+                        key_gp_tpre = (gp, tpre_col_val, effective_p1_col)
+                        if key_gp_tpre not in m_hat_cache:
+                            gp_mask_for_reg = (
+                                never_treated_mask if np.isinf(gp) else cohort_masks[gp]
+                            )
+                            m_hat_cache[key_gp_tpre] = estimate_outcome_regression(
+                                outcome_wide,
+                                covariate_matrix,
+                                gp_mask_for_reg,
+                                tpre_col_val,
+                                effective_p1_col,
+                            )
+                        # r_{g, inf}(X) and r_{g, g'}(X)
+                        for comp in {np.inf, gp}:
+                            rkey = (g, comp)
+                            if rkey not in r_hat_cache:
+                                comp_mask = (
+                                    never_treated_mask if np.isinf(comp) else cohort_masks[comp]
+                                )
+                                r_hat_cache[rkey] = estimate_propensity_ratio(
+                                    covariate_matrix,
+                                    cohort_masks[g],
+                                    comp_mask,
+                                    pscore_trim=self.pscore_trim,
+                                )
 
-                # Generated outcomes
-                y_hat = compute_generated_outcomes_nocov(
-                    target_g=g,
-                    target_t=t,
-                    valid_pairs=pairs,
-                    outcome_wide=outcome_wide,
-                    cohort_masks=cohort_masks,
-                    never_treated_mask=never_treated_mask,
-                    period_to_col=period_to_col,
-                    period_1_col=effective_p1_col,
-                )
+                    # Per-unit DR generated outcomes: shape (n_units, H)
+                    gen_out = compute_generated_outcomes_cov(
+                        target_g=g,
+                        target_t=t,
+                        valid_pairs=pairs,
+                        outcome_wide=outcome_wide,
+                        cohort_masks=cohort_masks,
+                        never_treated_mask=never_treated_mask,
+                        period_to_col=period_to_col,
+                        period_1_col=effective_p1_col,
+                        cohort_fractions=cohort_fractions,
+                        m_hat_cache=m_hat_cache,
+                        r_hat_cache=r_hat_cache,
+                    )
 
-                # ATT(g,t) = w @ y_hat
-                att_gt = float(weights @ y_hat) if len(weights) > 0 else np.nan
+                    # Average per pair → scalar generated outcomes
+                    y_hat = np.mean(gen_out, axis=0)  # shape (H,)
 
-                # EIF
-                eif_vals = compute_eif_nocov(
-                    target_g=g,
-                    target_t=t,
-                    weights=weights,
-                    valid_pairs=pairs,
-                    outcome_wide=outcome_wide,
-                    cohort_masks=cohort_masks,
-                    never_treated_mask=never_treated_mask,
-                    period_to_col=period_to_col,
-                    period_1_col=effective_p1_col,
-                    cohort_fractions=cohort_fractions,
-                    n_units=n_units,
-                )
-                eif_by_gt[(g, t)] = eif_vals
+                    # Unconditional Omega* from per-unit generated outcomes
+                    omega = compute_omega_star_cov(gen_out)
+
+                    # Efficient weights
+                    weights, _, cond_num = compute_efficient_weights(omega)
+                    stored_weights[(g, t)] = weights
+                    if omega.size > 0:
+                        stored_cond[(g, t)] = cond_num
+
+                    # ATT(g,t) = w @ y_hat
+                    att_gt = float(weights @ y_hat) if len(weights) > 0 else np.nan
+
+                    # EIF from DR generated outcomes
+                    eif_vals = compute_eif_cov(weights, gen_out, y_hat, n_units)
+                    eif_by_gt[(g, t)] = eif_vals
+                else:
+                    # No-covariates path (closed-form)
+                    omega = compute_omega_star_nocov(
+                        target_g=g,
+                        target_t=t,
+                        valid_pairs=pairs,
+                        outcome_wide=outcome_wide,
+                        cohort_masks=cohort_masks,
+                        never_treated_mask=never_treated_mask,
+                        period_to_col=period_to_col,
+                        period_1_col=effective_p1_col,
+                        cohort_fractions=cohort_fractions,
+                    )
+
+                    weights, _, cond_num = compute_efficient_weights(omega)
+                    stored_weights[(g, t)] = weights
+                    if omega.size > 0:
+                        stored_cond[(g, t)] = cond_num
+
+                    y_hat = compute_generated_outcomes_nocov(
+                        target_g=g,
+                        target_t=t,
+                        valid_pairs=pairs,
+                        outcome_wide=outcome_wide,
+                        cohort_masks=cohort_masks,
+                        never_treated_mask=never_treated_mask,
+                        period_to_col=period_to_col,
+                        period_1_col=effective_p1_col,
+                    )
+
+                    att_gt = float(weights @ y_hat) if len(weights) > 0 else np.nan
+
+                    eif_vals = compute_eif_nocov(
+                        target_g=g,
+                        target_t=t,
+                        weights=weights,
+                        valid_pairs=pairs,
+                        outcome_wide=outcome_wide,
+                        cohort_masks=cohort_masks,
+                        never_treated_mask=never_treated_mask,
+                        period_to_col=period_to_col,
+                        period_1_col=effective_p1_col,
+                        cohort_fractions=cohort_fractions,
+                        n_units=n_units,
+                    )
+                    eif_by_gt[(g, t)] = eif_vals
 
                 # Analytical SE = sqrt(mean(EIF^2) / n)  [paper p.21]
                 se_gt = float(np.sqrt(np.mean(eif_vals**2) / n_units))
@@ -557,6 +686,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             omega_condition_numbers=stored_cond if stored_cond else None,
             influence_functions=None,  # can store full EIF matrix if needed
             bootstrap_results=bootstrap_results,
+            estimation_path="dr" if use_covariates else "nocov",
         )
         self.is_fitted_ = True
         return self.results_

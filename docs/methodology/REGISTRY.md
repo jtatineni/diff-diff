@@ -657,7 +657,7 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - [x] Implements two-step semiparametric estimator (Equation 4.3)
 - [x] Supports both PT-Post (just-identified) and PT-All (overidentified) regimes
 - [x] Computes efficient weights from conditional covariance matrix inverse
-- [ ] Doubly robust: consistent if either outcome regression or propensity score ratio is correct
+- [x] Doubly robust: consistent if either outcome regression or propensity score ratio is correct
 - [x] No-covariates case uses closed-form sample means/covariances (no tuning)
 - [ ] With covariates: sieve-based propensity ratio estimation with AIC/BIC selection
 - [ ] Kernel-smoothed conditional covariance estimation
@@ -667,7 +667,9 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - [ ] Hausman-type pre-test for PT-All vs PT-Post (Theorem A.1)
 - [x] Each ATT(g,t) can be estimated independently (parallelizable)
 - [x] Absorbing treatment validation
-- [ ] Overlap diagnostics for propensity score ratios
+- [x] Overlap diagnostics for propensity score ratios
+- **Deviation from paper:** Propensity score ratios estimated via standard logistic regression rather than sieve-based convex minimization (Eq 4.1-4.2). Standard logit is a valid approach under the doubly robust property. Sieve estimation with AIC/BIC selection may be added for improved efficiency in a future version.
+- **Deviation from paper:** Unconditional covariance matrix Omega* used for efficient weights across (g', t_pre) pairs, rather than kernel-smoothed conditional covariance Omega*(X). This gives a valid doubly robust estimator with correct EIF-based SEs. Conditional weights (X-dependent) may be added later for full semiparametric efficiency.
 
 ---
 
