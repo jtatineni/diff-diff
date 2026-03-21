@@ -634,6 +634,13 @@ class SunAbraham:
             else None
         )
 
+        # Survey degrees of freedom for t-distribution inference
+        _sa_survey_df = (
+            max(survey_metadata.df_survey, 1)
+            if survey_metadata is not None and survey_metadata.df_survey is not None
+            else None
+        )
+
         # Compute interaction-weighted event study effects
         event_study_effects, cohort_weights = self._compute_iw_effects(
             df,
@@ -646,6 +653,7 @@ class SunAbraham:
             vcov_cohort,
             coef_index_map,
             survey_weight_col=survey_weight_col,
+            survey_df=_sa_survey_df,
         )
 
         # Compute overall ATT (average of post-treatment effects)
@@ -660,7 +668,9 @@ class SunAbraham:
             survey_weight_col=survey_weight_col,
         )
 
-        overall_t, overall_p, overall_ci = safe_inference(overall_att, overall_se, alpha=self.alpha)
+        overall_t, overall_p, overall_ci = safe_inference(
+            overall_att, overall_se, alpha=self.alpha, df=_sa_survey_df
+        )
 
         # Run bootstrap if requested
         bootstrap_results = None
@@ -881,6 +891,7 @@ class SunAbraham:
         vcov_cohort: np.ndarray,
         coef_index_map: Dict[Tuple[Any, int], int],
         survey_weight_col: Optional[str] = None,
+        survey_df: Optional[int] = None,
     ) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[Any, float]]]:
         """
         Compute interaction-weighted event study effects.
@@ -952,7 +963,7 @@ class SunAbraham:
             agg_var = float(weight_vec @ vcov_subset @ weight_vec)
             agg_se = np.sqrt(max(agg_var, 0))
 
-            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha)
+            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha, df=survey_df)
 
             event_study_effects[e] = {
                 "effect": agg_effect,
