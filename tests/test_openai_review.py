@@ -542,6 +542,32 @@ class TestParseImports:
         imports = review_mod.parse_imports(str(test_file))
         assert imports == set()
 
+    def test_submodule_imports_not_truncated(self, review_mod, repo_root):
+        """Submodule imports should keep full path, not truncate to 2 components."""
+        path = os.path.join(repo_root, "diff_diff", "visualization", "_staggered.py")
+        if not os.path.isfile(path):
+            pytest.skip("diff_diff/visualization/_staggered.py not found")
+        imports = review_mod.parse_imports(path)
+        # Should include full submodule paths like diff_diff.visualization._common
+        has_submodule = any(
+            m.count(".") >= 2 for m in imports  # at least 3 components
+        )
+        assert has_submodule, (
+            f"Expected submodule imports (3+ components) but got: {imports}"
+        )
+
+    def test_relative_import_aliases_expanded(self, review_mod, repo_root):
+        """from . import _event_study should resolve to diff_diff.visualization._event_study."""
+        path = os.path.join(repo_root, "diff_diff", "visualization", "__init__.py")
+        if not os.path.isfile(path):
+            pytest.skip("diff_diff/visualization/__init__.py not found")
+        imports = review_mod.parse_imports(path)
+        # Should include individual submodule names, not just the package
+        submodules = [m for m in imports if m.startswith("diff_diff.visualization._")]
+        assert len(submodules) > 0, (
+            f"Expected visualization submodule imports but got: {imports}"
+        )
+
     def test_handles_syntax_error(self, review_mod, tmp_path, capsys):
         test_file = tmp_path / "bad.py"
         test_file.write_text("def foo(:\n  pass\n")
@@ -582,6 +608,18 @@ class TestExpandImportGraph:
             pytest.skip("required files not found")
         result = review_mod.expand_import_graph([bacon, linalg], repo_root)
         assert linalg not in [os.path.normpath(p) for p in result]
+
+    def test_visualization_init_includes_submodules(self, review_mod, repo_root):
+        """expand_import_graph on visualization/__init__.py should include submodules."""
+        path = os.path.join(repo_root, "diff_diff", "visualization", "__init__.py")
+        if not os.path.isfile(path):
+            pytest.skip("diff_diff/visualization/__init__.py not found")
+        result = review_mod.expand_import_graph([path], repo_root)
+        filenames = [os.path.basename(p) for p in result]
+        # Should include visualization submodules like _event_study.py, _staggered.py
+        assert any(f.startswith("_") and f.endswith(".py") for f in filenames), (
+            f"Expected visualization submodule files but got: {filenames}"
+        )
 
     def test_empty_input(self, review_mod, repo_root):
         assert review_mod.expand_import_graph([], repo_root) == []

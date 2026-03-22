@@ -243,27 +243,26 @@ def parse_imports(file_path: str) -> "set[str]":
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.startswith("diff_diff"):
-                    # Extract the top-level module: diff_diff.linalg.foo -> diff_diff.linalg
-                    parts = alias.name.split(".")
-                    if len(parts) >= 2:
-                        imports.add(f"{parts[0]}.{parts[1]}")
+                if alias.name.startswith("diff_diff."):
+                    imports.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module and node.level == 0:
                 # Absolute import: from diff_diff.linalg import ...
-                if node.module.startswith("diff_diff"):
-                    parts = node.module.split(".")
-                    if len(parts) >= 2:
-                        imports.add(f"{parts[0]}.{parts[1]}")
+                if node.module.startswith("diff_diff."):
+                    imports.add(node.module)
             elif node.level > 0 and package:
-                # Relative import: from . import utils, from .linalg import solve_ols
+                # Relative import: from .foo import bar, or from . import foo
                 resolved = _resolve_relative_import(
                     package, node.module, node.level
                 )
                 if resolved and resolved.startswith("diff_diff"):
-                    parts = resolved.split(".")
-                    if len(parts) >= 2:
-                        imports.add(f"{parts[0]}.{parts[1]}")
+                    if node.module:
+                        # from .linalg import solve_ols → resolved = "diff_diff.linalg"
+                        imports.add(resolved)
+                    else:
+                        # from . import _event_study, _common → append each alias
+                        for alias in node.names:
+                            imports.add(f"{resolved}.{alias.name}")
     return imports
 
 
