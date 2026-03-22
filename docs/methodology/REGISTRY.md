@@ -618,6 +618,8 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - **Single pre-treatment period (g=2)**: `V*_{gt}(X)` is 1x1, efficient weights are trivially 1, estimator collapses to standard DiD with single baseline
 - **Rank deficiency in `V*_{gt}(X)` or `Omega*_{gt}(X)`**: Inverse does not exist if outcome changes are linearly dependent conditional on covariates. Detect via matrix condition number; fall back to pseudoinverse or standard estimator
 - **Near-zero propensity scores**: Ratio `p_g(X)/p_{g'}(X)` explodes. Overlap assumption (O) rules this out in population; implement trimming or warn on finite-sample instability
+- **Note:** When no sieve degree K succeeds for ratio estimation (basis dimension exceeds comparison group size, or all linear systems are singular), the estimator falls back to a constant ratio of 1 for all units with a UserWarning. The outcome regression adjustment remains active, so the generated outcomes (Eq 4.4) still incorporate covariate information via the m_hat terms. The DR property ensures consistency as long as the outcome regression is correctly specified.
+- **Note:** When no sieve degree K succeeds for inverse propensity estimation (algorithm step 4), the estimator falls back to unconditional n/n_group scaling with a UserWarning, which reduces to the unconditional Omega* approximation for the affected group.
 - **All units eventually treated**: Last cohort serves as "never-treated" by dropping last time period (Phase 1: raises ValueError; last-cohort-as-control fallback planned for Phase 2)
 - **Negative weights**: Explicitly stated as harmless for bias and beneficial for precision; arise from efficiency optimization under overidentification (Section 5.2)
 - **PT-Post regime (just-identified)**: Under PT-Post, EDiD automatically reduces to standard single-baseline estimator (Corollary 3.2). No downside to using EDiD -- it subsumes standard estimators
@@ -657,17 +659,21 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - [x] Implements two-step semiparametric estimator (Equation 4.3)
 - [x] Supports both PT-Post (just-identified) and PT-All (overidentified) regimes
 - [x] Computes efficient weights from conditional covariance matrix inverse
-- [ ] Doubly robust: consistent if either outcome regression or propensity score ratio is correct
+- [x] Doubly robust: consistent if either outcome regression or propensity score ratio is correct
 - [x] No-covariates case uses closed-form sample means/covariances (no tuning)
-- [ ] With covariates: sieve-based propensity ratio estimation with AIC/BIC selection
-- [ ] Kernel-smoothed conditional covariance estimation
+- [x] With covariates: sieve-based propensity ratio estimation with AIC/BIC selection
+- [x] Kernel-smoothed conditional covariance estimation
 - [x] Analytical SE from EIF sample variance
 - [ ] Cluster bootstrap SE option (recommended for small samples)
 - [x] Event-study aggregation ES(e) with cohort-size weights
 - [ ] Hausman-type pre-test for PT-All vs PT-Post (Theorem A.1)
 - [x] Each ATT(g,t) can be estimated independently (parallelizable)
 - [x] Absorbing treatment validation
-- [ ] Overlap diagnostics for propensity score ratios
+- [x] Overlap diagnostics for propensity score ratios
+- **Note:** Sieve ratio estimation uses polynomial basis functions (total degree up to K) with AIC/BIC model selection. The paper describes sieve estimators generally without specifying a particular basis family; polynomial sieves are a standard choice (Section 4, Eq 4.2). Negative sieve ratio predictions are clipped to a small positive value since the population ratio p_g(X)/p_{g'}(X) is non-negative.
+- **Note:** Kernel-smoothed conditional covariance Omega*(X) uses Gaussian kernel with Silverman's rule-of-thumb bandwidth by default. The paper specifies kernel smoothing (step 5, Section 4) without mandating a particular kernel or bandwidth selection method.
+- **Note:** Conditional covariance Omega*(X) scales each term by per-unit sieve-estimated inverse propensities s_hat_{g'}(X) = 1/p_{g'}(X) (algorithm step 4), matching Eq 3.12. The inverse propensity estimation uses the same polynomial sieve convex minimization as the ratio estimator. Estimated s_hat values are clipped to [1, n] with a UserWarning when clipping binds, mirroring the ratio path's overlap diagnostics.
+- **Note:** Outcome regressions m_hat_{g',t,tpre}(X) use linear OLS working models. The paper's Section 4 describes flexible nonparametric nuisance estimation (sieve regression, kernel smoothing, or ML methods). The DR property ensures consistency if either the OLS outcome model or the sieve propensity ratio is correctly specified, but the linear OLS specification does not generically guarantee attainment of the semiparametric efficiency bound unless the conditional mean is linear in the covariates.
 
 ---
 

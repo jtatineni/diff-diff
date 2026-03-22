@@ -13,6 +13,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from edid_dgp import make_compustat_dgp
 
 from diff_diff import CallawaySantAnna, EDiD, EfficientDiD
 from diff_diff.efficient_did_results import EfficientDiDResults
@@ -110,9 +111,6 @@ def _make_staggered_panel(
             "y": y,
         }
     )
-
-
-from edid_dgp import make_compustat_dgp
 
 
 def _make_compustat_dgp(n_units=400, n_periods=11, rho=0.0, seed=42):
@@ -250,10 +248,10 @@ class TestValidation:
         with pytest.raises(ValueError, match="Non-absorbing"):
             EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
 
-    def test_covariates_not_implemented(self):
+    def test_missing_covariate_column_raises(self):
         df = _make_simple_panel()
-        with pytest.raises(NotImplementedError, match="covariates"):
-            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", covariates=["y"])
+        with pytest.raises(ValueError, match="Missing covariate columns"):
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", covariates=["nonexistent"])
 
     def test_missing_columns(self):
         df = _make_simple_panel()
@@ -1061,3 +1059,425 @@ class TestCohortDropWarning:
         groups_present = {g for (g, t) in result.group_time_effects}
         assert 2.0 not in groups_present, "g=2 should have been dropped"
         assert 4.0 in groups_present, "g=4 should still be present"
+
+
+# =============================================================================
+# Covariate Tests
+# =============================================================================
+
+
+def _make_covariate_panel(
+    n_units=300,
+    n_periods=11,
+    seed=42,
+    covariate_effect=0.5,
+    confounding_strength=0.0,
+):
+    """Helper: staggered panel with time-invariant covariates.
+
+    Uses n_periods=11 (default) so both treatment groups g=5 and g=8 are valid.
+    """
+    return make_compustat_dgp(
+        n_units=n_units,
+        n_periods=n_periods,
+        rho=0.0,
+        seed=seed,
+        add_covariates=True,
+        covariate_effect=covariate_effect,
+        confounding_strength=confounding_strength,
+    )
+
+
+class TestCovariatesBasic:
+    """Tier 1: basic covariate path correctness."""
+
+    def test_covariates_fit_produces_results(self):
+        """Smoke test: fit with covariates returns valid results."""
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1", "x2"]
+        )
+        assert isinstance(result, EfficientDiDResults)
+        assert result.estimation_path == "dr"
+        assert np.isfinite(result.overall_att)
+        assert result.overall_se > 0
+        assert len(result.group_time_effects) > 0
+        for (g, t), eff in result.group_time_effects.items():
+            assert np.isfinite(eff["effect"])
+            # Baseline cells (t == g-1 under PT-Post) have SE=0 by construction
+            if t >= g:
+                assert eff["se"] > 0, f"SE=0 for post-treatment cell ({g}, {t})"
+
+    def test_nocov_match_when_irrelevant(self):
+        """Random noise covariates should give ~same ATT as nocov."""
+        df = _make_covariate_panel(covariate_effect=0.0)
+        edid = EfficientDiD(pt_assumption="post")
+        r_nocov = edid.fit(df, "y", "unit", "time", "first_treat")
+        r_cov = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1", "x2"]
+        )
+        # ATT should be close (not identical due to nuisance estimation noise)
+        assert (
+            abs(r_cov.overall_att - r_nocov.overall_att) < 0.3
+        ), f"DR ATT {r_cov.overall_att:.4f} too far from nocov {r_nocov.overall_att:.4f}"
+
+    def test_covariates_produce_valid_se(self):
+        """DR path with covariates explaining variance produces valid SE."""
+        df = _make_covariate_panel(covariate_effect=2.0, n_units=600)
+        r_cov = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        # DR SE should be positive and finite
+        assert r_cov.overall_se > 0
+        assert np.isfinite(r_cov.overall_se)
+        # ATT should be close to the nocov estimate (no confounding)
+        r_nocov = EfficientDiD(pt_assumption="post").fit(df, "y", "unit", "time", "first_treat")
+        assert abs(r_cov.overall_att - r_nocov.overall_att) < 0.2
+
+    def test_covariates_recover_effect_under_confounding(self):
+        """DGP with confounding: DR should recover true ATT closer to truth than nocov.
+
+        The DGP adds x1-dependent time trends to ALL units and shifts x1
+        distribution by group, so unconditional PT fails but conditional PT holds.
+        True ATT is unchanged by confounding (only levels shift, not treatment).
+        """
+        from edid_dgp import true_overall_att
+
+        true_att = true_overall_att()
+        df = _make_covariate_panel(
+            n_units=900,
+            covariate_effect=1.0,
+            confounding_strength=2.0,
+            seed=123,
+        )
+        r_nocov = EfficientDiD(pt_assumption="post").fit(df, "y", "unit", "time", "first_treat")
+        r_cov = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        assert np.isfinite(r_nocov.overall_att)
+        assert np.isfinite(r_cov.overall_att)
+        # DR should be closer to the true ATT than nocov
+        bias_nocov = abs(r_nocov.overall_att - true_att)
+        bias_cov = abs(r_cov.overall_att - true_att)
+        assert (
+            bias_cov < bias_nocov
+        ), f"DR bias ({bias_cov:.4f}) should be smaller than nocov bias ({bias_nocov:.4f})"
+
+    def test_empty_covariates_uses_nocov(self):
+        """covariates=[] should normalize to nocov path."""
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=[]
+        )
+        assert result.estimation_path == "nocov"
+
+
+class TestCovariateValidation:
+    """Tier 1: input validation for covariates."""
+
+    def test_missing_covariate_column_raises(self):
+        df = _make_covariate_panel()
+        with pytest.raises(ValueError, match="Missing covariate columns"):
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", covariates=["nonexistent"])
+
+    def test_nan_covariates_raises(self):
+        df = _make_covariate_panel()
+        df.loc[0, "x1"] = np.nan
+        with pytest.raises(ValueError, match="non-finite"):
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", covariates=["x1"])
+
+    def test_ratio_clip_validation(self):
+        with pytest.raises(ValueError, match="ratio_clip"):
+            EfficientDiD(ratio_clip=0.5)
+        with pytest.raises(ValueError, match="ratio_clip"):
+            EfficientDiD(ratio_clip=1.0)
+        with pytest.raises(ValueError, match="ratio_clip"):
+            EfficientDiD(ratio_clip=np.nan)
+        with pytest.raises(ValueError, match="ratio_clip"):
+            EfficientDiD(ratio_clip=np.inf)
+
+    def test_kernel_bandwidth_validation(self):
+        with pytest.raises(ValueError, match="kernel_bandwidth"):
+            EfficientDiD(kernel_bandwidth=0.0)
+        with pytest.raises(ValueError, match="kernel_bandwidth"):
+            EfficientDiD(kernel_bandwidth=-1.0)
+        with pytest.raises(ValueError, match="kernel_bandwidth"):
+            EfficientDiD(kernel_bandwidth=np.nan)
+        with pytest.raises(ValueError, match="kernel_bandwidth"):
+            EfficientDiD(kernel_bandwidth=np.inf)
+        # None is valid (auto bandwidth)
+        edid = EfficientDiD(kernel_bandwidth=None)
+        assert edid.kernel_bandwidth is None
+
+    def test_sieve_k_max_validation(self):
+        with pytest.raises(ValueError, match="sieve_k_max"):
+            EfficientDiD(sieve_k_max=0)
+        with pytest.raises(ValueError, match="sieve_k_max"):
+            EfficientDiD(sieve_k_max=-1)
+        # None is valid (auto)
+        edid = EfficientDiD(sieve_k_max=None)
+        assert edid.sieve_k_max is None
+
+    def test_sieve_criterion_validation(self):
+        with pytest.raises(ValueError, match="sieve_criterion"):
+            EfficientDiD(sieve_criterion="invalid")
+
+    def test_new_params_in_get_params(self):
+        edid = EfficientDiD(sieve_k_max=3, sieve_criterion="aic", ratio_clip=10.0)
+        params = edid.get_params()
+        assert params["sieve_k_max"] == 3
+        assert params["sieve_criterion"] == "aic"
+        assert params["ratio_clip"] == 10.0
+        assert "kernel_bandwidth" in params
+
+    def test_time_varying_covariates_raises(self):
+        df = _make_covariate_panel()
+        # Make x1 vary over time for one unit
+        mask = (df["unit"] == 0) & (df["time"] == 2)
+        df.loc[mask, "x1"] = 999.0
+        with pytest.raises(ValueError, match="varies over time"):
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", covariates=["x1"])
+
+
+class TestCovariatesPTAssumptions:
+    """Tier 2: covariates under different PT assumptions."""
+
+    def test_covariates_pt_post(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        assert isinstance(result, EfficientDiDResults)
+        assert result.estimation_path == "dr"
+        assert np.isfinite(result.overall_att)
+
+    def test_covariates_pt_all(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="all").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        assert isinstance(result, EfficientDiDResults)
+        assert result.estimation_path == "dr"
+        assert np.isfinite(result.overall_att)
+
+    def test_covariates_aggregate_event_study(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            aggregate="event_study",
+        )
+        assert result.event_study_effects is not None
+        assert len(result.event_study_effects) > 0
+        for e, eff in result.event_study_effects.items():
+            assert np.isfinite(eff["effect"])
+
+    def test_covariates_aggregate_group(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            aggregate="group",
+        )
+        assert result.group_effects is not None
+        assert len(result.group_effects) > 0
+
+    def test_covariates_aggregate_all(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            aggregate="all",
+        )
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+        assert np.isfinite(result.overall_att)
+
+
+class TestCovariatesEdgeCases:
+    """Tier 2: edge cases for covariate path."""
+
+    def test_single_covariate(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        assert np.isfinite(result.overall_att)
+
+    def test_binary_covariate(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x2"]
+        )
+        assert np.isfinite(result.overall_att)
+
+    def test_many_covariates(self):
+        """Multiple covariates including derived ones."""
+        df = _make_covariate_panel()
+        # Create a unit-level covariate (must be time-invariant)
+        rng = np.random.default_rng(99)
+        units = df["unit"].unique()
+        x3_map = dict(
+            zip(units, df.groupby("unit")["x1"].first() * 0.5 + rng.normal(0, 0.1, len(units)))
+        )
+        df["x3"] = df["unit"].map(x3_map)
+        result = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1", "x2", "x3"]
+        )
+        assert np.isfinite(result.overall_att)
+
+    def test_sieve_ratio_produces_valid_results(self):
+        """Sieve ratio estimation produces finite ATT with valid ratios."""
+        df = _make_covariate_panel(n_units=300, seed=88)
+        result = EfficientDiD(pt_assumption="post", sieve_k_max=3, sieve_criterion="bic").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        assert np.isfinite(result.overall_att)
+        assert result.overall_se > 0
+
+    def test_shuffled_units_match_ordered(self):
+        """Shuffled unit ordering must produce same ATT as original ordering.
+
+        Regression test for P0 label-alignment bug in estimate_propensity_ratio:
+        D labels must follow the row order of combined_mask, not assume
+        g-units come before g'-units.
+        """
+        df_ordered = _make_covariate_panel(n_units=300, seed=55)
+        # Shuffle: randomize unit IDs so cohorts are interleaved
+        rng = np.random.default_rng(55)
+        df_shuffled = df_ordered.copy()
+        units = df_shuffled["unit"].unique()
+        perm = rng.permutation(len(units))
+        unit_map = dict(zip(units, perm))
+        df_shuffled["unit"] = df_shuffled["unit"].map(unit_map)
+        df_shuffled = df_shuffled.sort_values(["unit", "time"]).reset_index(drop=True)
+
+        edid = EfficientDiD(pt_assumption="post")
+        r_ordered = edid.fit(df_ordered, "y", "unit", "time", "first_treat", covariates=["x1"])
+        r_shuffled = EfficientDiD(pt_assumption="post").fit(
+            df_shuffled, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        assert abs(r_ordered.overall_att - r_shuffled.overall_att) < 1e-10, (
+            f"ATT mismatch: ordered={r_ordered.overall_att:.6f} "
+            f"vs shuffled={r_shuffled.overall_att:.6f}"
+        )
+
+    def test_extreme_covariates_warns_overlap(self):
+        """Extreme covariates should trigger overlap warning and still produce valid results."""
+        df = _make_covariate_panel(n_units=300, seed=77)
+        rng = np.random.default_rng(77)
+        units = df["unit"].unique()
+        n_units = len(units)
+        ft_map = df.groupby("unit")["first_treat"].first()
+        sep_vals = np.where(
+            ft_map.values < np.inf,
+            5.0 + rng.normal(0, 0.01, n_units),
+            -5.0 + rng.normal(0, 0.01, n_units),
+        )
+        sep_map = dict(zip(units, sep_vals))
+        df["x_sep"] = df["unit"].map(sep_map)
+        with pytest.warns(UserWarning, match="overlap|clipped|propensity"):
+            result = EfficientDiD(pt_assumption="post").fit(
+                df, "y", "unit", "time", "first_treat", covariates=["x_sep"]
+            )
+        assert np.isfinite(result.overall_att)
+        assert result.overall_se > 0
+
+    def test_eif_mean_approximately_zero(self):
+        """EIF with per-unit weights should have sample mean ≈ 0."""
+        from diff_diff.efficient_did_covariates import compute_eif_cov
+
+        rng = np.random.default_rng(42)
+        n, H = 200, 3
+        gen_out = rng.normal(0, 1, (n, H))
+        # Non-constant per-unit weights (each row sums to 1)
+        raw_w = rng.exponential(1, (n, H))
+        per_unit_w = raw_w / raw_w.sum(axis=1, keepdims=True)
+        att = float(np.mean(np.sum(per_unit_w * gen_out, axis=1)))
+        eif = compute_eif_cov(per_unit_w, gen_out, att, n)
+        assert abs(np.mean(eif)) < 1e-10, f"EIF mean should be ≈ 0, got {np.mean(eif):.2e}"
+
+
+class TestCovariatesBootstrap:
+    """Tier 2: bootstrap with covariates."""
+
+    def test_bootstrap_with_covariates_smoke(self):
+        """Bootstrap with covariates produces valid inference."""
+        df = _make_covariate_panel(n_units=300)
+        result = EfficientDiD(pt_assumption="post", n_bootstrap=99, seed=42).fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        assert result.bootstrap_results is not None
+        assert np.isfinite(result.overall_att)
+        assert result.overall_se > 0
+        ci = result.overall_conf_int
+        assert ci[0] < ci[1], "CI lower must be less than upper"
+        assert np.isfinite(result.overall_p_value)
+
+    def test_covariates_pt_all_bootstrap(self):
+        """PT-All + bootstrap + covariates end-to-end."""
+        df = _make_covariate_panel(n_units=300)
+        result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            aggregate="all",
+        )
+        assert result.bootstrap_results is not None
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+        assert np.isfinite(result.overall_att)
+        assert result.overall_se > 0
+
+
+class TestSieveFallbacks:
+    """Tier 2: sieve estimation failure fallbacks."""
+
+    def test_ratio_sieve_fallback_tiny_group_warns(self):
+        """When comparison group is too small for any basis, fall back with warning."""
+        from diff_diff.efficient_did_covariates import estimate_propensity_ratio_sieve
+
+        rng = np.random.default_rng(42)
+        n = 100
+        X = rng.normal(0, 1, (n, 3))  # 3 covariates
+        mask_g = np.zeros(n, dtype=bool)
+        mask_g[:50] = True
+        # Tiny comparison group: only 2 units (fewer than any basis dimension)
+        mask_gp = np.zeros(n, dtype=bool)
+        mask_gp[50:52] = True
+        with pytest.warns(UserWarning, match="Propensity ratio sieve estimation failed"):
+            ratio = estimate_propensity_ratio_sieve(X, mask_g, mask_gp, k_max=3)
+        assert np.all(np.isfinite(ratio))
+        # Fallback: constant ratio of 1 (clipped to [1/ratio_clip, ratio_clip])
+        assert np.allclose(ratio, 1.0)
+
+    def test_inverse_propensity_sieve_fallback_warns(self):
+        """When group is too small for sieve, fall back with warning."""
+        from diff_diff.efficient_did_covariates import estimate_inverse_propensity_sieve
+
+        rng = np.random.default_rng(42)
+        n = 100
+        X = rng.normal(0, 1, (n, 5))  # 5 covariates
+        # Tiny group: only 2 units
+        mask = np.zeros(n, dtype=bool)
+        mask[:2] = True
+        with pytest.warns(UserWarning, match="Inverse propensity sieve estimation failed"):
+            s_hat = estimate_inverse_propensity_sieve(X, mask, k_max=3)
+        assert np.all(np.isfinite(s_hat))
+        # Should fall back to unconditional n/n_group = 100/2 = 50
+        assert np.allclose(s_hat, 50.0)
