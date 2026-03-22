@@ -243,17 +243,18 @@ class StackedDiD:
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
 
-        # Reject fweight — Q-weight composition is ratio-valued and breaks
-        # frequency-weight semantics (fweights must be integers)
+        # Reject fweight and aweight — Q-weight composition is ratio-valued
+        # and breaks both frequency-weight (integer) and analytic-weight
+        # (inverse-variance) semantics after multiplicative composition
         if (
             survey_design is not None
             and hasattr(survey_design, "weight_type")
-            and survey_design.weight_type == "fweight"
+            and survey_design.weight_type in ("fweight", "aweight")
         ):
             raise ValueError(
-                "StackedDiD does not support frequency weights (weight_type='fweight') "
-                "because Q-weight composition produces non-integer composed weights. "
-                "Use weight_type='pweight' (default) or 'aweight' instead."
+                f"StackedDiD does not support weight_type='{survey_design.weight_type}' "
+                "because Q-weight composition changes the weight semantics. "
+                "Use weight_type='pweight' (default) instead."
             )
 
         # Collect survey design column names for propagation through sub-experiments

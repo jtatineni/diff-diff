@@ -1021,7 +1021,7 @@ The paper text states a stricter bound (T_min + 1) but the R code by the co-auth
 - [x] Anticipation parameter support
 - [x] Never-treated encoding (0 and inf)
 - [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments
-- **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; `weight_type="fweight"` is rejected because Q-weight composition produces non-integer composed weights that break frequency-weight semantics
+- **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; only `weight_type="pweight"` (default) is supported — `fweight` and `aweight` are rejected because Q-weight composition changes weight semantics (non-integer for fweight, non-inverse-variance for aweight)
 
 ---
 

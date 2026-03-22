@@ -18,7 +18,7 @@ Phases 1-3 are implemented. Phases 4-5 are deferred for future PRs.
 
 | Estimator | File | Survey Support | Notes |
 |-----------|------|----------------|-------|
-| StackedDiD | `stacked_did.py` | Full (pweight/aweight) | Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; fweight rejected (non-integer composition) |
+| StackedDiD | `stacked_did.py` | pweight only | Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; fweight/aweight rejected (composition changes weight semantics) |
 | SunAbraham | `sun_abraham.py` | Full | Survey weights in LinearRegression + weighted within-transform; bootstrap+survey deferred |
 | BaconDecomposition | `bacon.py` | Diagnostic | Weighted cell means, weighted within-transform, weighted group shares; no inference (diagnostic only) |
 | TripleDifference | `triple_diff.py` | Reg only | Regression method with weighted OLS + TSL on influence functions; IPW/DR deferred (needs weighted `solve_logit()`) |
