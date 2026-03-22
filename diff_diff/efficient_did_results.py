@@ -40,7 +40,7 @@ class HausmanPretestResult:
     att_post: float
     """Overall ATT under PT-Post."""
     recommendation: str
-    """``"pt_all"`` if fail to reject, ``"pt_post"`` if reject."""
+    """``"pt_all"`` if fail to reject, ``"pt_post"`` if reject, ``"inconclusive"`` if test unavailable."""
     gt_details: Optional[pd.DataFrame] = None
     """Per-event-study-horizon details: relative_period, es_all, es_post, delta."""
 

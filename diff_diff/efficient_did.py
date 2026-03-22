@@ -332,7 +332,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             Survey design specification for design-based inference.
             Applies survey weights to all means, covariances, and cohort
             fractions, and uses Taylor Series Linearization for SE
-            estimation.
+            estimation.  Cannot be combined with ``cluster``.
+        store_eif : bool, default False
+            Store per-(g,t) EIF vectors in the results object.  Used
+            internally by :meth:`hausman_pretest`; not needed for
+            normal usage.
 
         Returns
         -------
@@ -1499,11 +1503,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         def _aggregate_es(
             gt_effects: Dict, eif_dict: Dict, groups: List, ant: int
         ) -> Dict[int, Tuple[float, np.ndarray]]:
-            """Aggregate (g,t) effects to post-treatment ES(e) with cohort weights."""
-            by_e: Dict[int, List[Tuple[float, float, np.ndarray]]] = {}
+            """Aggregate (g,t) effects to post-treatment ES(e) with WIF-corrected EIF."""
+            by_e: Dict[int, List[Tuple[Tuple, float, float, np.ndarray]]] = {}
             for (g, t), d in gt_effects.items():
                 e = int(t - g)
-                if e < -ant:  # pre-treatment beyond anticipation window
+                if e < -ant:
                     continue
                 if not np.isfinite(d["effect"]):
                     continue
@@ -1515,21 +1519,34 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 pg = cohort_fractions.get(g, 0.0)
                 if e not in by_e:
                     by_e[e] = []
-                by_e[e].append((d["effect"], pg, eif_vec))
+                by_e[e].append(((g, t), d["effect"], pg, eif_vec))
 
             result: Dict[int, Tuple[float, np.ndarray]] = {}
             for e, items in by_e.items():
-                if e < 0:  # restrict to post-treatment (e >= 0)
+                if e < 0:
                     continue
-                effs = np.array([x[0] for x in items])
-                pgs = np.array([x[1] for x in items])
-                eifs = [x[2] for x in items]
+                effs = np.array([x[1] for x in items])
+                pgs = np.array([x[2] for x in items])
+                eifs = [x[3] for x in items]
+                gt_pairs_e = [x[0] for x in items]
                 total_pg = pgs.sum()
                 w = pgs / total_pg if total_pg > 0 else np.ones(len(pgs)) / len(pgs)
                 es_eff = float(np.sum(w * effs))
                 es_eif = np.zeros(n_units)
                 for k_idx in range(len(eifs)):
                     es_eif += w[k_idx] * eifs[k_idx]
+                # WIF correction for estimated cohort-size weights
+                groups_e = np.array([g for (g, t) in gt_pairs_e])
+                pg_e = np.array([cohort_fractions.get(g, 0.0) for g, t in gt_pairs_e])
+                sum_pg = pg_e.sum()
+                if sum_pg > 0:
+                    indicator = (unit_cohorts[:, None] == groups_e[None, :]).astype(float)
+                    indicator_sum = np.sum(indicator - pg_e, axis=1)
+                    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                        if1 = (indicator - pg_e) / sum_pg
+                        if2 = np.outer(indicator_sum, pg_e) / sum_pg**2
+                        wif = (if1 - if2) @ effs
+                    es_eif = es_eif + wif
                 result[e] = (es_eff, es_eif)
             return result
 
