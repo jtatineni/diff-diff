@@ -228,6 +228,7 @@ if [ -f .claude/reviews/review-state.json ]; then
     if [ "$stored_branch" != "$branch_name" ] || [ "$stored_base" != "$comparison_ref" ]; then
         echo "Warning: review-state.json is from branch '$stored_branch' (base: '$stored_base'), but current is '$branch_name' (base: '$comparison_ref'). Discarding stale state."
         rm -f .claude/reviews/review-state.json
+        rm -f .claude/reviews/local-review-previous.md
         last_reviewed_commit=""
     fi
 

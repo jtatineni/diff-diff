@@ -750,7 +750,7 @@ def apply_token_budget(
 # Source: https://platform.openai.com/docs/pricing
 # MAINTENANCE: Update when OpenAI changes pricing.
 PRICING = {
-    "gpt-5.4": (2.00, 8.00),
+    "gpt-5.4": (2.50, 15.00),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "o3": (2.00, 8.00),
@@ -1440,14 +1440,16 @@ def main() -> None:
         current_findings, parse_uncertain = parse_review_findings(
             review_content, current_round
         )
-        if parse_uncertain and structured_findings:
+        if parse_uncertain:
             print(
                 "Warning: Could not parse findings from review output. "
-                "Preserving prior findings and review state baseline.",
+                "Preserving prior review state baseline (not advancing "
+                "last_reviewed_commit).",
                 file=sys.stderr,
             )
-            # Do NOT write review state — keep prior baseline intact so the
-            # next delta review doesn't skip unparsed code
+            # Do NOT write review state at all — keep prior baseline intact
+            # regardless of whether prior findings exist, so the next delta
+            # review doesn't skip unparsed code
         elif structured_findings:
             final_findings = merge_findings(structured_findings, current_findings)
             write_review_state(
