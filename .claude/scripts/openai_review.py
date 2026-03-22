@@ -367,6 +367,14 @@ def parse_review_state(path: str) -> "tuple[list[dict], int]":
         )
         return ([], 0)
 
+    # Validate structure: must be a dict with expected fields
+    if not isinstance(data, dict):
+        print(
+            "Warning: review-state.json is not a JSON object. Starting fresh.",
+            file=sys.stderr,
+        )
+        return ([], 0)
+
     if data.get("schema_version") != _REVIEW_STATE_SCHEMA_VERSION:
         print(
             f"Warning: review-state.json schema version mismatch "
@@ -376,7 +384,19 @@ def parse_review_state(path: str) -> "tuple[list[dict], int]":
         )
         return ([], 0)
 
-    return (data.get("findings", []), data.get("review_round", 0))
+    findings = data.get("findings", [])
+    if not isinstance(findings, list):
+        print(
+            "Warning: review-state.json findings is not a list. Starting fresh.",
+            file=sys.stderr,
+        )
+        return ([], 0)
+
+    review_round = data.get("review_round", 0)
+    if not isinstance(review_round, int):
+        review_round = 0
+
+    return (findings, review_round)
 
 
 def write_review_state(
@@ -1308,12 +1328,21 @@ def main() -> None:
                     import_paths, args.repo_root, role="import-context"
                 )
 
-    # Handle --include-files
+    # Handle --include-files (confined to repo root for security)
     if args.include_files and args.repo_root:
+        repo_root_real = os.path.realpath(args.repo_root)
         extra_paths: list[str] = []
         for name in args.include_files.split(","):
             name = name.strip()
             if not name:
+                continue
+            # Reject absolute paths
+            if os.path.isabs(name):
+                print(
+                    f"Warning: --include-files: absolute paths not allowed "
+                    f"({name}), skipping.",
+                    file=sys.stderr,
+                )
                 continue
             if os.sep in name or "/" in name:
                 # Path relative to repo root
@@ -1321,6 +1350,15 @@ def main() -> None:
             else:
                 # Filename to resolve under diff_diff/
                 candidate = os.path.join(args.repo_root, "diff_diff", name)
+            # Normalize and verify within repo root (prevent ../ traversal)
+            candidate = os.path.realpath(candidate)
+            if not candidate.startswith(repo_root_real + os.sep):
+                print(
+                    f"Warning: --include-files: {name} resolves outside repo "
+                    f"root, skipping.",
+                    file=sys.stderr,
+                )
+                continue
             if os.path.isfile(candidate):
                 extra_paths.append(candidate)
             else:

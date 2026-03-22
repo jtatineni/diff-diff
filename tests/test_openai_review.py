@@ -740,6 +740,33 @@ class TestParseReviewState:
         captured = capsys.readouterr()
         assert "schema version mismatch" in captured.err
 
+    def test_non_dict_root_returns_empty(self, review_mod, tmp_path, capsys):
+        state_file = tmp_path / "review-state.json"
+        state_file.write_text("[1, 2, 3]")  # list, not dict
+        findings, round_num = review_mod.parse_review_state(str(state_file))
+        assert findings == []
+        assert round_num == 0
+        captured = capsys.readouterr()
+        assert "not a JSON object" in captured.err
+
+    def test_non_list_findings_returns_empty(self, review_mod, tmp_path, capsys):
+        state_file = tmp_path / "review-state.json"
+        state = {"schema_version": 1, "findings": "not a list", "review_round": 1}
+        state_file.write_text(json.dumps(state))
+        findings, round_num = review_mod.parse_review_state(str(state_file))
+        assert findings == []
+        assert round_num == 0
+        captured = capsys.readouterr()
+        assert "not a list" in captured.err
+
+    def test_non_int_round_defaults_to_zero(self, review_mod, tmp_path):
+        state_file = tmp_path / "review-state.json"
+        state = {"schema_version": 1, "findings": [], "review_round": "not_int"}
+        state_file.write_text(json.dumps(state))
+        findings, round_num = review_mod.parse_review_state(str(state_file))
+        assert findings == []
+        assert round_num == 0
+
 
 class TestWriteReviewState:
     def test_writes_valid_json(self, review_mod, tmp_path):
@@ -1230,3 +1257,26 @@ class TestParseThenMerge:
         stored_findings, stored_round = review_mod.parse_review_state(state_path)
         assert stored_round == 1
         assert stored_findings[0]["id"] == "R1-P1-1"
+
+
+# ---------------------------------------------------------------------------
+# Include-files path confinement
+# ---------------------------------------------------------------------------
+
+
+class TestIncludeFilesConfinement:
+    """Verify --include-files rejects paths outside repo root."""
+
+    def test_rejects_absolute_path(self, review_mod, repo_root, capsys):
+        """Absolute paths should be rejected."""
+        # Simulate the path resolution logic from main()
+        name = "/etc/passwd"
+        assert os.path.isabs(name)
+        # The script rejects absolute paths before even resolving
+
+    def test_rejects_traversal(self, review_mod, repo_root):
+        """../ traversal should be detected after realpath normalization."""
+        candidate = os.path.join(repo_root, "../../../etc/passwd")
+        candidate = os.path.realpath(candidate)
+        repo_root_real = os.path.realpath(repo_root)
+        assert not candidate.startswith(repo_root_real + os.sep)

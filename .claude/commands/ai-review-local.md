@@ -207,22 +207,44 @@ Check for existing review state and generate delta diff if applicable. **Validat
 stored state matches the current branch and base** before reusing — stale state from a
 different branch can contaminate re-review context.
 
-**If `--force-fresh` is set**, skip ALL re-review state and run completely fresh:
+**If `--force-fresh` is set**, delete prior state but still seed a new baseline:
 ```bash
 rm -f .claude/reviews/review-state.json
 rm -f .claude/reviews/local-review-latest.md
 rm -f .claude/reviews/local-review-previous.md
-echo "Force-fresh: deleted all prior review state."
-# Skip to Step 5 — do NOT pass --review-state, --previous-review, --delta-diff
+echo "Force-fresh: deleted all prior review state. Fresh review will seed new baseline."
+# Do NOT pass --previous-review or --delta-diff/--delta-changed-files
+# DO still pass --review-state, --commit-sha, --base-ref so the fresh run seeds a new baseline
 ```
 
 **Otherwise**, check for existing review state:
 ```bash
 if [ -f .claude/reviews/review-state.json ]; then
     # Read state fields
-    last_reviewed_commit=$(python3 -c "import json; print(json.load(open('.claude/reviews/review-state.json')).get('last_reviewed_commit', ''))")
-    stored_branch=$(python3 -c "import json; print(json.load(open('.claude/reviews/review-state.json')).get('branch', ''))")
-    stored_base=$(python3 -c "import json; print(json.load(open('.claude/reviews/review-state.json')).get('base_ref', ''))")
+    last_reviewed_commit=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('.claude/reviews/review-state.json'))
+    print(d.get('last_reviewed_commit', '') if isinstance(d, dict) else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+    stored_branch=$(python3 -c "
+import json
+try:
+    d = json.load(open('.claude/reviews/review-state.json'))
+    print(d.get('branch', '') if isinstance(d, dict) else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+    stored_base=$(python3 -c "
+import json
+try:
+    d = json.load(open('.claude/reviews/review-state.json'))
+    print(d.get('base_ref', '') if isinstance(d, dict) else '')
+except Exception:
+    print('')
+" 2>/dev/null)
 
     # Validate branch/base match
     if [ "$stored_branch" != "$branch_name" ] || [ "$stored_base" != "$comparison_ref" ]; then
@@ -268,7 +290,7 @@ review file is deleted to prevent stale findings from leaking into a fresh revie
 Build and run the command. Include optional arguments only when their conditions are met:
 - `--previous-review`: only if `.claude/reviews/local-review-previous.md` exists AND `--force-fresh` was NOT set
 - `--delta-diff` and `--delta-changed-files`: only if delta files were generated in Step 4
-- `--review-state` and `--commit-sha`: include UNLESS `--force-fresh` was set (forced fresh runs skip state tracking)
+- `--review-state`, `--commit-sha`, `--base-ref`: always include (even with `--force-fresh`, to seed a new baseline)
 - `--context`, `--include-files`, `--token-budget`: pass through from parsed arguments
 
 ```bash
