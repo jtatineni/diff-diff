@@ -1077,7 +1077,13 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         vcov = compute_survey_vcov(X_ones, eif_vals, self._unit_resolved_survey)
         return float(np.sqrt(np.abs(vcov[0, 0])))
 
-    def _eif_se(self, eif_vals: np.ndarray, n_units: int) -> float:
+    def _eif_se(
+        self,
+        eif_vals: np.ndarray,
+        n_units: int,
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
+    ) -> float:
         """Compute SE from aggregated EIF scores.
 
         Dispatches to survey TSL when ``_unit_resolved_survey`` is set
@@ -1085,9 +1091,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         """
         if self._unit_resolved_survey is not None:
             return self._compute_survey_eif_se(eif_vals)
-        return _compute_se_from_eif(
-            eif_vals, n_units, self._cluster_indices, self._n_clusters
-        )
+        return _compute_se_from_eif(eif_vals, n_units, cluster_indices, n_clusters)
 
     # -- Aggregation helpers --------------------------------------------------
 
@@ -1196,7 +1200,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
         # SE = sqrt(mean(EIF^2) / n) — standard IF-based SE
         # (dispatches to survey TSL or cluster-robust when active)
-        se = self._eif_se(agg_eif_total, n_units)
+        se = self._eif_se(agg_eif_total, n_units, cluster_indices, n_clusters)
 
         return overall_att, se
 
@@ -1290,7 +1294,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 )
                 agg_eif = agg_eif + wif
 
-            agg_se = self._eif_se(agg_eif, n_units)
+            agg_se = self._eif_se(agg_eif, n_units, cluster_indices, n_clusters)
 
             t_stat, p_val, ci = safe_inference(
                 agg_eff, agg_se, alpha=self.alpha, df=self._survey_df
@@ -1354,7 +1358,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             agg_eif = np.zeros(n_units)
             for k, gt in enumerate(g_gts):
                 agg_eif += w[k] * eif_by_gt[gt]
-            agg_se = self._eif_se(agg_eif, n_units)
+            agg_se = self._eif_se(agg_eif, n_units, cluster_indices, n_clusters)
 
             t_stat, p_val, ci = safe_inference(
                 agg_eff, agg_se, alpha=self.alpha, df=self._survey_df
@@ -1455,7 +1459,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             set(result_all.group_time_effects.keys()) & set(result_post.group_time_effects.keys())
         )
 
-        def _nan_result(recommendation: str = "pt_post") -> HausmanPretestResult:
+        def _nan_result() -> HausmanPretestResult:
             return HausmanPretestResult(
                 statistic=np.nan,
                 p_value=np.nan,
@@ -1464,10 +1468,20 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 alpha=alpha,
                 att_all=result_all.overall_att,
                 att_post=result_post.overall_att,
-                recommendation=recommendation,
+                recommendation="inconclusive",
                 gt_details=None,
             )
 
+        if not common_gts:
+            return _nan_result()
+
+        # Filter out (g,t) cells with non-finite effect estimates
+        common_gts = [
+            gt
+            for gt in common_gts
+            if np.isfinite(result_all.group_time_effects[gt]["effect"])
+            and np.isfinite(result_post.group_time_effects[gt]["effect"])
+        ]
         if not common_gts:
             return _nan_result()
 
@@ -1572,7 +1586,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         # Effective rank = number of positive eigenvalues
         effective_rank = int(np.sum(eigvals > tol))
         if effective_rank == 0:
-            return _nan_result("pt_all")
+            return _nan_result()
 
         # Compute H = delta' @ pinv(V) @ delta
         V_pinv = np.linalg.pinv(V, rcond=tol / max_eigval if max_eigval > 0 else 1e-10)

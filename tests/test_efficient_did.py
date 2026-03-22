@@ -588,7 +588,7 @@ class TestHausmanPretest:
         assert np.isfinite(pretest.p_value)
         assert pretest.df > 0
         # With homogeneous trends, should generally fail to reject
-        assert pretest.recommendation in ("pt_all", "pt_post")
+        assert pretest.recommendation in ("pt_all", "pt_post", "inconclusive")
 
     def test_hausman_differential_trends_detects(self):
         """DGP with cohort-specific trends → test detects or warns."""
@@ -636,7 +636,7 @@ class TestHausmanPretest:
         # Both are acceptable outcomes for a DGP that violates PT-All
         if np.isfinite(pretest.statistic):
             assert pretest.statistic >= 0
-        assert pretest.recommendation in ("pt_all", "pt_post")
+        assert pretest.recommendation in ("pt_all", "pt_post", "inconclusive")
 
     def test_hausman_gt_details(self):
         """gt_details should have expected columns."""
@@ -650,7 +650,7 @@ class TestHausmanPretest:
         """recommendation should be pt_all or pt_post."""
         df = _make_staggered_panel(n_per_group=80, n_control=100)
         pretest = EfficientDiD.hausman_pretest(df, "y", "unit", "time", "first_treat")
-        assert pretest.recommendation in ("pt_all", "pt_post")
+        assert pretest.recommendation in ("pt_all", "pt_post", "inconclusive")
         if pretest.reject:
             assert pretest.recommendation == "pt_post"
         else:
@@ -700,7 +700,7 @@ class TestHausmanPretest:
         pretest = EfficientDiD.hausman_pretest(
             df, "y", "unit", "time", "first_treat", cluster="cluster_id"
         )
-        assert pretest.recommendation in ("pt_all", "pt_post")
+        assert pretest.recommendation in ("pt_all", "pt_post", "inconclusive")
         assert pretest.df >= 0
 
     def test_hausman_last_cohort(self):
@@ -719,7 +719,7 @@ class TestHausmanPretest:
             "first_treat",
             control_group="last_cohort",
         )
-        assert pretest.recommendation in ("pt_all", "pt_post")
+        assert pretest.recommendation in ("pt_all", "pt_post", "inconclusive")
         assert np.isfinite(pretest.att_all)
         assert np.isfinite(pretest.att_post)
 
@@ -802,6 +802,27 @@ class TestClusterRobustSE:
         # Both SEs should be finite and positive
         assert result_clustered.overall_se > 0
         assert result_unclustered.overall_se > 0
+
+    def test_clustered_aggregate_event_study(self):
+        """Clustered SE with aggregate='event_study' should produce finite results."""
+        df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
+        result = EfficientDiD(cluster="cluster_id").fit(
+            df, "y", "unit", "time", "first_treat", aggregate="event_study"
+        )
+        assert result.event_study_effects is not None
+        for e, d in result.event_study_effects.items():
+            assert np.isfinite(d["se"])
+
+    def test_clustered_aggregate_all(self):
+        """Clustered SE with aggregate='all' should produce finite results."""
+        df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
+        result = EfficientDiD(cluster="cluster_id").fit(
+            df, "y", "unit", "time", "first_treat", aggregate="all"
+        )
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+        for g, d in result.group_effects.items():
+            assert np.isfinite(d["se"])
 
     def test_cluster_bootstrap(self, ci_params):
         """Cluster bootstrap should produce finite inference."""
