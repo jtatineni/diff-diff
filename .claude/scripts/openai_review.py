@@ -573,7 +573,12 @@ def _finding_keys(f: dict) -> "tuple[tuple[str, str, str], tuple[str, str]]":
     Fallback: (severity, summary[:50]) — used when either side lacks a file path,
     with unique-candidate constraint to avoid ambiguous matching.
     """
-    summary = f.get("summary", "").lower().strip()[:50]
+    summary = f.get("summary", "").lower().strip()
+    # Strip inline file:line references that cause churn on line number shifts
+    # e.g., "missing nan guard in `foo.py:l10`" → "missing nan guard in"
+    # (summary is already lowercased at this point)
+    summary = re.sub(r"`?[\w/.]+\.py(?::l?\d+(?:-l?\d+)?)?`?", "", summary)
+    summary = summary.strip()[:50]
     severity = f.get("severity", "")
     location = f.get("location", "")
     # Use full relative path (strip line numbers only, keep directory structure)
@@ -1438,22 +1443,30 @@ def main() -> None:
         if parse_uncertain and structured_findings:
             print(
                 "Warning: Could not parse findings from review output. "
-                "Preserving prior findings.",
+                "Preserving prior findings and review state baseline.",
                 file=sys.stderr,
             )
-            final_findings = structured_findings
+            # Do NOT write review state — keep prior baseline intact so the
+            # next delta review doesn't skip unparsed code
         elif structured_findings:
             final_findings = merge_findings(structured_findings, current_findings)
+            write_review_state(
+                path=args.review_state,
+                commit_sha=args.commit_sha,
+                base_ref=args.base_ref,
+                branch=args.branch_info,
+                review_round=current_round,
+                findings=final_findings,
+            )
         else:
-            final_findings = current_findings
-        write_review_state(
-            path=args.review_state,
-            commit_sha=args.commit_sha,
-            base_ref=args.base_ref,
-            branch=args.branch_info,
-            review_round=current_round,
-            findings=final_findings,
-        )
+            write_review_state(
+                path=args.review_state,
+                commit_sha=args.commit_sha,
+                base_ref=args.base_ref,
+                branch=args.branch_info,
+                review_round=current_round,
+                findings=current_findings,
+            )
 
     # Print completion summary with actual usage
     actual_input = usage.get("prompt_tokens", 0)

@@ -1165,3 +1165,54 @@ class TestReviewStateBranchValidation:
             data = json.load(f)
         assert data["branch"] == "feature/test"
         assert data["base_ref"] == "main"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: parse then merge pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestParseThenMerge:
+    def test_line_shift_does_not_cause_churn(self, review_mod):
+        """Same finding at different line numbers should merge as 1 open, 0 addressed."""
+        review_r1 = "**P1** Missing NaN guard in `foo.py:L10`\n"
+        review_r2 = "**P1** Missing NaN guard in `foo.py:L12`\n"
+        findings_r1, _ = review_mod.parse_review_findings(review_r1, 1)
+        findings_r2, _ = review_mod.parse_review_findings(review_r2, 2)
+        assert len(findings_r1) == 1
+        assert len(findings_r2) == 1
+        merged = review_mod.merge_findings(findings_r1, findings_r2)
+        open_findings = [f for f in merged if f["status"] == "open"]
+        addressed = [f for f in merged if f["status"] == "addressed"]
+        assert len(open_findings) == 1
+        assert len(addressed) == 0
+
+    def test_parse_uncertain_does_not_advance_state(self, review_mod, tmp_path):
+        """When parse_uncertain fires, review-state.json should not be modified."""
+        state_path = str(tmp_path / "review-state.json")
+        # Write initial state
+        review_mod.write_review_state(
+            path=state_path,
+            commit_sha="initial123",
+            base_ref="main",
+            branch="feature/x",
+            review_round=1,
+            findings=[{"id": "R1-P1-1", "severity": "P1", "summary": "Test"}],
+        )
+        initial_mtime = os.path.getmtime(state_path)
+
+        # Simulate parse_uncertain scenario
+        unparseable_review = "- **Severity:** P1\n"  # Will return ([], True)
+        findings, uncertain = review_mod.parse_review_findings(unparseable_review, 2)
+        assert uncertain
+        assert findings == []
+
+        # The state file should NOT have been modified
+        # (in production, main() skips write_review_state when uncertain)
+        current_mtime = os.path.getmtime(state_path)
+        assert current_mtime == initial_mtime
+
+        # Verify original state is intact
+        stored_findings, stored_round = review_mod.parse_review_state(state_path)
+        assert stored_round == 1
+        assert stored_findings[0]["id"] == "R1-P1-1"
