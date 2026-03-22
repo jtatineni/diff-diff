@@ -205,17 +205,19 @@ class TROPCarouselPDF(FPDF):
 
         for i, label in enumerate(labels):
             px = start_x + i * (pillar_w + gap)
+            # Dark panel pillars with gold border
             pillar = mpatches.FancyBboxPatch(
                 (px, pillar_bottom), pillar_w, pillar_h,
                 boxstyle="round,pad=0.1",
-                facecolor=GOLD_HEX, edgecolor="none", alpha=0.85,
+                facecolor=DARK_PANEL_HEX, edgecolor=GOLD_HEX,
+                linewidth=2.0,
             )
             ax.add_patch(pillar)
             ax.text(px + pillar_w / 2, pillar_bottom + pillar_h / 2, label,
-                    color=BG_HEX, fontsize=14, ha="center", va="center",
+                    color=GOLD_HEX, fontsize=14, ha="center", va="center",
                     fontweight="bold")
 
-        # Top bar spanning all pillars
+        # Solid gold top bar — visually distinct from pillars
         bar_h = 0.55
         bar_y = pillar_top + 0.15
         bar = mpatches.FancyBboxPatch(
@@ -231,6 +233,38 @@ class TROPCarouselPDF(FPDF):
         fd, path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
         fig.savefig(path, dpi=200, bbox_inches="tight", pad_inches=0.1,
+                    transparent=True)
+        plt.close(fig)
+
+        with PILImage.open(path) as img:
+            pw, ph = img.size
+
+        self._temp_files.append(path)
+        return path, pw, ph
+
+    # ── Diagram: Equation Labels (Slide 4) ────────────────────────
+
+    def _render_equation_labels(self):
+        """Render equation component labels with LaTeX Greek symbols."""
+        fig = plt.figure(figsize=(8, 1.4))
+
+        # Line 1: alpha, beta = unit and time fixed effects
+        fig.text(0.05, 0.72, r"$\alpha_i,\; \beta_t$",
+                 fontsize=18, color=GRAY_HEX, va="center")
+        fig.text(0.20, 0.72, "=  unit and time fixed effects",
+                 fontsize=14, color=GRAY_HEX, va="center")
+
+        # Line 2: L_it = low-rank factor structure (highlighted gold)
+        fig.text(0.05, 0.28, r"$L_{it}$",
+                 fontsize=18, color=GOLD_HEX, va="center",
+                 fontstyle="italic")
+        fig.text(0.20, 0.28, "=  low-rank factor structure (key innovation)",
+                 fontsize=14, color=GOLD_HEX, va="center")
+
+        fig.patch.set_alpha(0)
+        fd, path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        fig.savefig(path, dpi=200, bbox_inches="tight", pad_inches=0.06,
                     transparent=True)
         plt.close(fig)
 
@@ -276,23 +310,25 @@ class TROPCarouselPDF(FPDF):
     # ════════════════════════════════════════════════════════════════
 
     def slide_01_hook(self):
-        """Slide 1: Hook — Triply RObust Panel (TROP) Estimator."""
+        """Slide 1: Hook — Triply RObust Panel (TROP) Estimator.
+
+        Claims & sources:
+        - "Triply RObust Panel": paper title, arXiv:2508.21536
+        - "One estimator, three robustness guarantees": triple robustness
+          property, paper Section 3 / Theorem 1
+        """
         self.add_page()
         self._add_dark_bg()
 
         # Hero — method name
-        self._centered_text(50, "Triply RObust Panel", size=48, color=GOLD)
-        self._centered_text(100, "(TROP) Estimator", size=42, color=GOLD)
-
-        # Positioning
-        self._centered_text(155, "First Open-Source", size=24, color=WHITE)
-        self._centered_text(180, "Implementation", size=24, color=WHITE)
+        self._centered_text(60, "Triply RObust Panel", size=48, color=GOLD)
+        self._centered_text(112, "(TROP) Estimator", size=42, color=GOLD)
 
         # Badge
         badge_w = 170
         badge_h = 34
         badge_x = (WIDTH - badge_w) / 2
-        badge_y = 210
+        badge_y = 175
         self.set_draw_color(*GOLD)
         self.set_line_width(1.5)
         self.rect(badge_x, badge_y, badge_w, badge_h, "D")
@@ -303,19 +339,26 @@ class TROPCarouselPDF(FPDF):
         self.cell(badge_w, 16, "diff-diff v2.7", align="C")
 
         # Citation
-        self.set_xy(0, 260)
+        self.set_xy(0, 230)
         self.set_font("Helvetica", "I", 17)
         self.set_text_color(*GRAY)
         self.cell(WIDTH, 10, "Athey, Imbens, Qu & Viviano (2025)", align="C")
 
         # Tagline
-        self._centered_text(290, "One estimator, three robustness guarantees",
+        self._centered_text(265, "One estimator, three robustness guarantees",
                             size=17, bold=False, color=GRAY)
 
         self._add_footer()
 
     def slide_02_dilemma(self):
-        """Slide 2: The Dilemma — which estimator do you trust?"""
+        """Slide 2: The Dilemma — which estimator do you trust?
+
+        Claims & sources:
+        - Quote "Different assumptions -- difficult to validate or compare
+          in practice": direct from Athey et al. (2025) Section 1, para 1
+        - DiD/MC/SC assumption descriptions: REGISTRY.md lines 1309-1312,
+          paper Section 2.2 special cases
+        """
         self.add_page()
         self._add_dark_bg()
 
@@ -372,7 +415,16 @@ class TROPCarouselPDF(FPDF):
         self._add_footer()
 
     def slide_03_answer(self):
-        """Slide 3: The Answer — TROP subsumes all three approaches."""
+        """Slide 3: The Answer — TROP subsumes all three approaches.
+
+        Claims & sources:
+        - "TROP subsumes all three approaches -- each is a special case":
+          REGISTRY.md lines 1309-1312, paper Section 2.2 special cases:
+          lambda_nn=inf,uniform -> DID/TWFE; uniform,lambda_nn<inf -> MC;
+          lambda_nn=inf,specific weights -> SC/SDID
+        - "Consistent if any one modeling component is correct": triple
+          robustness property, paper Section 3 / Theorem 1
+        """
         self.add_page()
         self._add_dark_bg()
 
@@ -406,7 +458,16 @@ class TROPCarouselPDF(FPDF):
         self._add_footer()
 
     def slide_04_triple_robustness(self):
-        """Slide 4: Triple Robustness — three pillars + equation."""
+        """Slide 4: Triple Robustness — three pillars + equation.
+
+        Claims & sources:
+        - Three components (Factor Model, Unit Weights, Time Weights):
+          REGISTRY.md lines 1271-1307, paper Equations 2-3
+        - Working model Y_it(0) = alpha_i + beta_t + L_it + eps_it:
+          REGISTRY.md lines 1273-1279, paper Section 2.2
+        - "Any one pillar is sufficient": triple robustness property,
+          paper Section 3 / Theorem 1
+        """
         self.add_page()
         self._add_dark_bg()
 
@@ -426,14 +487,30 @@ class TROPCarouselPDF(FPDF):
         self._centered_text(sub_y, "Any one pillar is sufficient",
                             size=17, bold=False, color=GRAY)
 
+        # Equation intro
+        intro_y = sub_y + 22
+        self._centered_text(intro_y,
+                            "TROP models counterfactual outcomes as:",
+                            size=16, bold=False, color=GRAY)
+
         # Equation: working model
         eq_path, epw, eph = self._render_equations(
             [r"$Y_{it}(0) = \alpha_i + \beta_t + L_{it}"
              r" + \varepsilon_{it}$"],
-            fontsize=30,
+            fontsize=28,
         )
-        eq_y = sub_y + 25
-        self._place_equation_centered(eq_path, epw, eph, eq_y, max_w=200)
+        eq_y = intro_y + 18
+        eq_h = self._place_equation_centered(eq_path, epw, eph, eq_y,
+                                             max_w=190)
+
+        # Component labels (rendered via matplotlib for Greek symbols)
+        label_path, lpw, lph = self._render_equation_labels()
+        label_w = WIDTH * 0.72
+        label_aspect = lph / lpw
+        label_h = label_w * label_aspect
+        label_x = (WIDTH - label_w) / 2
+        label_y = eq_y + eq_h + 4
+        self.image(label_path, label_x, label_y, label_w)
 
         self._add_footer()
 
@@ -523,7 +600,16 @@ class TROPCarouselPDF(FPDF):
         self._add_footer()
 
     def slide_07_tuning(self):
-        """Slide 7: Data-Driven Tuning."""
+        """Slide 7: Data-Driven Tuning.
+
+        Claims & sources:
+        - "All tuning parameters selected automatically via LOOCV":
+          REGISTRY.md lines 1314-1335, paper Equation 5, Footnote 2
+        - Individual treatment effects tau_it: REGISTRY.md lines 1263-1268,
+          paper Equation 1
+        - Factor diagnostics / effective rank: REGISTRY.md lines 1371-1376
+        - Local vs global methods: REGISTRY.md lines 1382-1414
+        """
         self.add_page()
         self._add_dark_bg()
 
@@ -624,21 +710,21 @@ class TROPCarouselPDF(FPDF):
 
 def main():
     pdf = TROPCarouselPDF()
+    try:
+        pdf.slide_01_hook()
+        pdf.slide_02_dilemma()
+        pdf.slide_03_answer()
+        pdf.slide_04_triple_robustness()
+        pdf.slide_05_when_to_use()
+        pdf.slide_06_code()
+        pdf.slide_07_tuning()
+        pdf.slide_08_cta()
 
-    pdf.slide_01_hook()
-    pdf.slide_02_dilemma()
-    pdf.slide_03_answer()
-    pdf.slide_04_triple_robustness()
-    pdf.slide_05_when_to_use()
-    pdf.slide_06_code()
-    pdf.slide_07_tuning()
-    pdf.slide_08_cta()
-
-    output_path = Path(__file__).parent / "diff-diff-trop-carousel.pdf"
-    pdf.output(str(output_path))
-    print(f"PDF saved to: {output_path}")
-
-    pdf.cleanup()
+        output_path = Path(__file__).parent / "diff-diff-trop-carousel.pdf"
+        pdf.output(str(output_path))
+        print(f"PDF saved to: {output_path}")
+    finally:
+        pdf.cleanup()
 
 
 if __name__ == "__main__":
