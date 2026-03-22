@@ -951,6 +951,21 @@ class TestParseReviewFindings:
         assert len(findings) == 1
         assert findings[0]["severity"] == "P2"
 
+    def test_finding_with_skip_marker_in_summary_still_parsed(self, review_mod):
+        """Findings whose summaries contain skip markers like 'Path to Approval' should parse."""
+        review_text = "**P2** The prompt omits the Path to Approval section in `foo.py:L10`\n"
+        findings, uncertain = review_mod.parse_review_findings(review_text, 1)
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "P2"
+        assert not uncertain
+
+    def test_finding_with_looks_good_in_summary(self, review_mod):
+        """Finding mentioning 'Looks good' in summary should not be skipped."""
+        review_text = "**P1** Assessment says Looks good but edge case is unhandled in `bar.py:L5`\n"
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "P1"
+
     def test_parses_multiline_finding_block(self, review_mod):
         """Multi-line finding blocks (Severity/Impact on separate lines)."""
         review_text = (

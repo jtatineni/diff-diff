@@ -563,9 +563,10 @@ def parse_review_findings(
                 current_section = heading
             continue
 
-        # Check for block start
+        # Check for block start — trust the severity pattern; don't apply
+        # skip heuristics here (they're for the uncertainty scanner only)
         sev_match = _BLOCK_START.search(line)
-        if sev_match and not _should_skip_line(line):
+        if sev_match:
             # Flush previous block
             if current_block is not None:
                 blocks.append((current_severity, current_block_section, current_block))
@@ -1473,8 +1474,11 @@ def main() -> None:
         estimate_tokens(criteria_text)
         + estimate_tokens(registry_content)
         + estimate_tokens(diff_text)
-        + estimate_tokens(changed_files_text)
     )
+    # In delta mode, changed_files_text is NOT in the prompt (replaced by delta sections);
+    # only count it for fresh reviews where it appears in "Changes Under Review"
+    if not delta_diff_text:
+        mandatory_est += estimate_tokens(changed_files_text)
     if previous_review:
         mandatory_est += estimate_tokens(previous_review)
     if delta_diff_text:
