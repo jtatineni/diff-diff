@@ -6,6 +6,8 @@ where the repo checkout includes .claude/scripts/.
 """
 
 import importlib.util
+import json
+import os
 import pathlib
 import subprocess
 
@@ -61,6 +63,13 @@ def review_mod():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
+
+
+@pytest.fixture
+def repo_root():
+    """Return the repo root directory."""
+    assert _SCRIPT_PATH is not None
+    return str(_SCRIPT_PATH.parent.parent.parent)
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +205,7 @@ class TestAdaptReviewCriteria:
 
     def test_warns_on_missing_substitution(self, review_mod, capsys):
         # A text that doesn't contain any of the expected patterns
-        result = review_mod._adapt_review_criteria("Totally different text")
+        review_mod._adapt_review_criteria("Totally different text")
         captured = capsys.readouterr()
         assert "Warning: prompt substitution did not match" in captured.err
 
@@ -257,6 +266,117 @@ class TestCompilePrompt:
             previous_review=None,
         )
         assert "<previous-review-output>" not in result
+
+
+# ---------------------------------------------------------------------------
+# compile_prompt — enhanced context modes
+# ---------------------------------------------------------------------------
+
+
+class TestCompilePromptWithContext:
+    """Test compile_prompt with the new context parameters."""
+
+    def test_backward_compatibility(self, review_mod):
+        """Original args produce same structure — no source/import sections."""
+        result = review_mod.compile_prompt(
+            criteria_text="Criteria.",
+            registry_content="Registry.",
+            diff_text="diff content",
+            changed_files_text="M\tfoo.py",
+            branch_info="main",
+            previous_review=None,
+        )
+        assert "Full Source Files" not in result
+        assert "Import Context" not in result
+        assert "Changes Under Review" in result
+
+    def test_standard_mode_includes_source_files(self, review_mod):
+        result = review_mod.compile_prompt(
+            criteria_text="C.",
+            registry_content="R.",
+            diff_text="D.",
+            changed_files_text="M\tf.py",
+            branch_info="b",
+            previous_review=None,
+            source_files_text='<file path="diff_diff/foo.py">content</file>',
+        )
+        assert "Full Source Files (Changed)" in result
+        assert "sins of omission" in result
+        assert '<file path="diff_diff/foo.py">' in result
+        assert "Import Context" not in result
+
+    def test_deep_mode_includes_import_context(self, review_mod):
+        result = review_mod.compile_prompt(
+            criteria_text="C.",
+            registry_content="R.",
+            diff_text="D.",
+            changed_files_text="M\tf.py",
+            branch_info="b",
+            previous_review=None,
+            source_files_text="<file>src</file>",
+            import_context_text='<file path="diff_diff/utils.py" role="import-context">utils</file>',
+        )
+        assert "Full Source Files (Changed)" in result
+        assert "Import Context (Read-Only Reference)" in result
+        assert "Do NOT flag issues in these files" in result
+
+    def test_delta_diff_structure(self, review_mod):
+        result = review_mod.compile_prompt(
+            criteria_text="C.",
+            registry_content="R.",
+            diff_text="full diff content",
+            changed_files_text="M\tf.py",
+            branch_info="b",
+            previous_review="Previous findings.",
+            delta_diff_text="delta diff content",
+            delta_changed_files_text="M\tf.py",
+        )
+        assert "Changes Since Last Review" in result
+        assert "delta diff content" in result
+        assert "Full Branch Diff (Reference Only)" in result
+        assert "<full-diff-reference>" in result
+        assert "full diff content" in result
+
+    def test_delta_diff_with_structured_findings(self, review_mod):
+        findings = [
+            {
+                "id": "R1-P1-1",
+                "severity": "P1",
+                "section": "Methodology",
+                "summary": "Missing NaN guard",
+                "location": "diff_diff/foo.py:L42",
+                "status": "open",
+            }
+        ]
+        result = review_mod.compile_prompt(
+            criteria_text="C.",
+            registry_content="R.",
+            diff_text="full diff",
+            changed_files_text="M\tf.py",
+            branch_info="b",
+            previous_review="Prev.",
+            delta_diff_text="delta",
+            structured_findings=findings,
+        )
+        assert "Previous Findings" in result
+        assert "R1-P1-1" in result
+        assert "Missing NaN guard" in result
+        assert "diff_diff/foo.py:L42" in result
+
+    def test_fresh_review_no_delta_sections(self, review_mod):
+        """Without delta_diff_text, no delta-specific sections appear."""
+        result = review_mod.compile_prompt(
+            criteria_text="C.",
+            registry_content="R.",
+            diff_text="D.",
+            changed_files_text="M\tf.py",
+            branch_info="b",
+            previous_review=None,
+            source_files_text="<file>src</file>",
+        )
+        assert "Changes Since Last Review" not in result
+        assert "Full Branch Diff (Reference Only)" not in result
+        assert "Changes Under Review" in result
 
 
 # ---------------------------------------------------------------------------
@@ -338,3 +458,340 @@ class TestEstimateTokens:
 
     def test_empty_string(self, review_mod):
         assert review_mod.estimate_tokens("") == 0
+
+
+# ---------------------------------------------------------------------------
+# resolve_changed_source_files
+# ---------------------------------------------------------------------------
+
+
+class TestResolveChangedSourceFiles:
+    def test_filters_to_diff_diff_py_files(self, review_mod, repo_root):
+        text = "M\tdiff_diff/bacon.py\nM\ttests/test_bacon.py\nM\tCLAUDE.md"
+        paths = review_mod.resolve_changed_source_files(text, repo_root)
+        assert any("bacon.py" in p for p in paths)
+        assert not any("test_bacon" in p for p in paths)
+        assert not any("CLAUDE" in p for p in paths)
+
+    def test_skips_deleted_files(self, review_mod, repo_root):
+        text = "D\tdiff_diff/deleted_file.py\nM\tdiff_diff/bacon.py"
+        paths = review_mod.resolve_changed_source_files(text, repo_root)
+        assert not any("deleted_file" in p for p in paths)
+        assert any("bacon.py" in p for p in paths)
+
+    def test_empty_input(self, review_mod, repo_root):
+        assert review_mod.resolve_changed_source_files("", repo_root) == []
+
+    def test_skips_nonexistent_files(self, review_mod, repo_root):
+        text = "M\tdiff_diff/nonexistent_xyz.py"
+        assert review_mod.resolve_changed_source_files(text, repo_root) == []
+
+
+# ---------------------------------------------------------------------------
+# read_source_files
+# ---------------------------------------------------------------------------
+
+
+class TestReadSourceFiles:
+    def test_produces_xml_tagged_output(self, review_mod, repo_root):
+        # Use a real file that exists
+        path = os.path.join(repo_root, "diff_diff", "__init__.py")
+        if not os.path.isfile(path):
+            pytest.skip("diff_diff/__init__.py not found")
+        result = review_mod.read_source_files([path], repo_root)
+        assert '<file path="diff_diff/__init__.py">' in result
+        assert "</file>" in result
+
+    def test_role_attribute(self, review_mod, repo_root):
+        path = os.path.join(repo_root, "diff_diff", "__init__.py")
+        if not os.path.isfile(path):
+            pytest.skip("diff_diff/__init__.py not found")
+        result = review_mod.read_source_files([path], repo_root, role="import-context")
+        assert 'role="import-context"' in result
+
+    def test_handles_missing_file(self, review_mod, repo_root, capsys):
+        result = review_mod.read_source_files(
+            ["/nonexistent/path.py"], repo_root
+        )
+        assert result == ""
+        captured = capsys.readouterr()
+        assert "Warning" in captured.err
+
+    def test_empty_paths(self, review_mod, repo_root):
+        assert review_mod.read_source_files([], repo_root) == ""
+
+
+# ---------------------------------------------------------------------------
+# parse_imports
+# ---------------------------------------------------------------------------
+
+
+class TestParseImports:
+    def test_extracts_absolute_import(self, review_mod, repo_root):
+        """Test with a real source file that imports diff_diff modules."""
+        path = os.path.join(repo_root, "diff_diff", "bacon.py")
+        if not os.path.isfile(path):
+            pytest.skip("diff_diff/bacon.py not found")
+        imports = review_mod.parse_imports(path)
+        # bacon.py should import from diff_diff (e.g., diff_diff.linalg or diff_diff.utils)
+        assert all(m.startswith("diff_diff.") for m in imports)
+
+    def test_ignores_non_diff_diff_imports(self, review_mod, tmp_path):
+        test_file = tmp_path / "test.py"
+        test_file.write_text("import numpy\nimport pandas\nfrom os import path\n")
+        imports = review_mod.parse_imports(str(test_file))
+        assert imports == set()
+
+    def test_handles_syntax_error(self, review_mod, tmp_path, capsys):
+        test_file = tmp_path / "bad.py"
+        test_file.write_text("def foo(:\n  pass\n")
+        imports = review_mod.parse_imports(str(test_file))
+        assert imports == set()
+        captured = capsys.readouterr()
+        assert "SyntaxError" in captured.err
+
+    def test_handles_missing_file(self, review_mod):
+        imports = review_mod.parse_imports("/nonexistent/file.py")
+        assert imports == set()
+
+
+# ---------------------------------------------------------------------------
+# expand_import_graph
+# ---------------------------------------------------------------------------
+
+
+class TestExpandImportGraph:
+    def test_expands_imports(self, review_mod, repo_root):
+        """Expanding imports for a real file produces additional paths."""
+        path = os.path.join(repo_root, "diff_diff", "bacon.py")
+        if not os.path.isfile(path):
+            pytest.skip("diff_diff/bacon.py not found")
+        result = review_mod.expand_import_graph([path], repo_root)
+        # Should find at least some imports (linalg, utils, etc.)
+        assert isinstance(result, list)
+        # All paths should be absolute and exist
+        for p in result:
+            assert os.path.isabs(p)
+            assert os.path.isfile(p)
+
+    def test_deduplicates_against_changed_set(self, review_mod, repo_root):
+        """Files already in changed_paths should not appear in expansion."""
+        bacon = os.path.join(repo_root, "diff_diff", "bacon.py")
+        linalg = os.path.join(repo_root, "diff_diff", "linalg.py")
+        if not (os.path.isfile(bacon) and os.path.isfile(linalg)):
+            pytest.skip("required files not found")
+        result = review_mod.expand_import_graph([bacon, linalg], repo_root)
+        assert linalg not in [os.path.normpath(p) for p in result]
+
+    def test_empty_input(self, review_mod, repo_root):
+        assert review_mod.expand_import_graph([], repo_root) == []
+
+
+# ---------------------------------------------------------------------------
+# estimate_cost
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateCost:
+    def test_known_model(self, review_mod):
+        result = review_mod.estimate_cost(100_000, 16_384, "gpt-5.4")
+        assert result is not None
+        assert "$" in result
+        assert "input" in result
+        assert "output" in result
+
+    def test_unknown_model(self, review_mod):
+        result = review_mod.estimate_cost(100_000, 16_384, "unknown-model")
+        assert result is None
+
+    def test_prefix_match(self, review_mod):
+        # gpt-5.4-turbo should match gpt-5.4 prefix
+        result = review_mod.estimate_cost(100_000, 16_384, "gpt-5.4-turbo")
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Token budget — apply_token_budget
+# ---------------------------------------------------------------------------
+
+
+class TestTokenBudget:
+    def test_under_budget_all_included(self, review_mod):
+        sections = {
+            "_mandatory": "x" * 400,  # ~100 tokens
+            "source_files": "y" * 400,  # ~100 tokens
+            "import_files": '<file path="a.py">small</file>',
+        }
+        included, dropped = review_mod.apply_token_budget(sections, 200_000)
+        assert "source_files" in included
+        assert "import_files" in included
+        assert dropped == []
+
+    def test_over_budget_drops_imports(self, review_mod):
+        sections = {
+            "_mandatory": "x" * 800_000,  # ~200K tokens (fills budget)
+            "source_files": "y" * 400,
+            "import_files": (
+                '<file path="big.py">' + "z" * 40_000 + "</file>\n"
+                '<file path="small.py">' + "z" * 400 + "</file>"
+            ),
+        }
+        included, dropped = review_mod.apply_token_budget(sections, 200_000)
+        # At least one import file should be dropped
+        assert len(dropped) > 0
+
+    def test_mandatory_exceeds_budget_warns(self, review_mod, capsys):
+        sections = {
+            "_mandatory": "x" * 1_200_000,  # ~300K tokens
+        }
+        review_mod.apply_token_budget(sections, 200_000)
+        captured = capsys.readouterr()
+        assert "exceeding --token-budget" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Review state — parse and write
+# ---------------------------------------------------------------------------
+
+
+class TestParseReviewState:
+    def test_reads_valid_json(self, review_mod, tmp_path):
+        state_file = tmp_path / "review-state.json"
+        state = {
+            "schema_version": 1,
+            "last_reviewed_commit": "abc123",
+            "review_round": 2,
+            "findings": [{"id": "R1-P1-1", "severity": "P1"}],
+        }
+        state_file.write_text(json.dumps(state))
+        findings, round_num = review_mod.parse_review_state(str(state_file))
+        assert len(findings) == 1
+        assert round_num == 2
+
+    def test_missing_file_returns_empty(self, review_mod):
+        findings, round_num = review_mod.parse_review_state("/nonexistent.json")
+        assert findings == []
+        assert round_num == 0
+
+    def test_schema_version_mismatch(self, review_mod, tmp_path, capsys):
+        state_file = tmp_path / "review-state.json"
+        state = {"schema_version": 999, "findings": []}
+        state_file.write_text(json.dumps(state))
+        findings, round_num = review_mod.parse_review_state(str(state_file))
+        assert findings == []
+        assert round_num == 0
+        captured = capsys.readouterr()
+        assert "schema version mismatch" in captured.err
+
+
+class TestWriteReviewState:
+    def test_writes_valid_json(self, review_mod, tmp_path):
+        path = str(tmp_path / "review-state.json")
+        review_mod.write_review_state(
+            path=path,
+            commit_sha="abc123",
+            base_ref="main",
+            branch="feature/test",
+            review_round=1,
+            findings=[{"id": "R1-P0-1", "severity": "P0"}],
+        )
+        with open(path) as f:
+            data = json.load(f)
+        assert data["schema_version"] == 1
+        assert data["last_reviewed_commit"] == "abc123"
+        assert data["review_round"] == 1
+        assert len(data["findings"]) == 1
+
+    def test_round_trips_with_parse(self, review_mod, tmp_path):
+        path = str(tmp_path / "review-state.json")
+        original_findings = [
+            {"id": "R1-P1-1", "severity": "P1", "summary": "Test finding"}
+        ]
+        review_mod.write_review_state(
+            path=path,
+            commit_sha="def456",
+            base_ref="main",
+            branch="fix/bug",
+            review_round=3,
+            findings=original_findings,
+        )
+        findings, round_num = review_mod.parse_review_state(path)
+        assert round_num == 3
+        assert findings[0]["id"] == "R1-P1-1"
+
+
+# ---------------------------------------------------------------------------
+# Review findings parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseReviewFindings:
+    def test_extracts_findings(self, review_mod):
+        review_text = (
+            "## Methodology\n\n"
+            "**P1** Missing NaN guard in `diff_diff/staggered.py:L145`\n\n"
+            "## Code Quality\n\n"
+            "**P2** Unused import in `diff_diff/utils.py:L12`\n\n"
+            "## Summary\n"
+            "Overall assessment: Looks good\n"
+        )
+        findings = review_mod.parse_review_findings(review_text, 1)
+        assert len(findings) >= 2
+        severities = {f["severity"] for f in findings}
+        assert "P1" in severities
+        assert "P2" in severities
+
+    def test_empty_review(self, review_mod):
+        findings = review_mod.parse_review_findings("No issues found.", 1)
+        assert findings == []
+
+    def test_finding_ids_follow_format(self, review_mod):
+        review_text = (
+            "**P0** Critical bug in `foo.py:L1`\n"
+            "**P1** Minor issue in the code\n"
+        )
+        findings = review_mod.parse_review_findings(review_text, 2)
+        for f in findings:
+            assert f["id"].startswith("R2-")
+            assert f["status"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# Merge findings
+# ---------------------------------------------------------------------------
+
+
+class TestMergeFindings:
+    def test_matching_finding_stays_open(self, review_mod):
+        previous = [
+            {"id": "R1-P1-1", "severity": "P1", "location": "foo.py:L10", "status": "open"}
+        ]
+        current = [
+            {"id": "R2-P1-1", "severity": "P1", "location": "foo.py:L10", "status": "open"}
+        ]
+        merged = review_mod.merge_findings(previous, current)
+        open_at_loc = [
+            f for f in merged
+            if f["location"] == "foo.py:L10" and f["status"] == "open"
+        ]
+        assert len(open_at_loc) >= 1
+
+    def test_absent_finding_marked_addressed(self, review_mod):
+        previous = [
+            {"id": "R1-P1-1", "severity": "P1", "location": "foo.py:L10", "status": "open"}
+        ]
+        current = []  # Finding was addressed
+        merged = review_mod.merge_findings(previous, current)
+        addressed = [f for f in merged if f["status"] == "addressed"]
+        assert len(addressed) == 1
+        assert addressed[0]["location"] == "foo.py:L10"
+
+    def test_new_finding_added_as_open(self, review_mod):
+        previous = []
+        current = [
+            {"id": "R2-P0-1", "severity": "P0", "location": "bar.py:L5", "status": "open"}
+        ]
+        merged = review_mod.merge_findings(previous, current)
+        assert len(merged) == 1
+        assert merged[0]["status"] == "open"
+        assert merged[0]["location"] == "bar.py:L5"
