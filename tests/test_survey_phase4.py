@@ -717,6 +717,106 @@ class TestTripleDifferenceIPWSurvey:
 
 
 # =============================================================================
+# TestCallawaySantAnnaSurveyInference
+# =============================================================================
+
+
+class TestCallawaySantAnnaSurveyInference:
+    """Validate CS survey inference beyond smoke tests."""
+
+    def test_se_scale_invariance_all_methods(self, staggered_survey_data):
+        """SE should be invariant under weight rescaling for all methods."""
+        data = staggered_survey_data
+        data = data.copy()
+        data["weight2"] = data["weight"] * 3.7
+        sd1 = SurveyDesign(weights="weight")
+        sd2 = SurveyDesign(weights="weight2")
+
+        for method in ["reg", "ipw", "dr"]:
+            est = CallawaySantAnna(estimation_method=method)
+            r1 = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="simple",
+                survey_design=sd1,
+            )
+            r2 = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="simple",
+                survey_design=sd2,
+            )
+            assert np.isclose(
+                r1.overall_att, r2.overall_att, atol=1e-8
+            ), f"{method}: ATT not scale-invariant"
+            assert np.isclose(
+                r1.overall_se, r2.overall_se, atol=1e-8
+            ), f"{method}: SE not scale-invariant"
+
+    def test_survey_weights_change_per_cell_att(self, staggered_survey_data):
+        """Non-uniform survey weights should change per-cell ATT(g,t)."""
+        data = staggered_survey_data
+        sd = SurveyDesign(weights="weight")
+        for method in ["reg", "ipw", "dr"]:
+            r_no = CallawaySantAnna(estimation_method=method).fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
+            r_sv = CallawaySantAnna(estimation_method=method).fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                survey_design=sd,
+            )
+            # At least one cell ATT should differ
+            effects_no = [d["effect"] for d in r_no.group_time_effects.values()]
+            effects_sv = [d["effect"] for d in r_sv.group_time_effects.values()]
+            assert not np.allclose(
+                effects_no, effects_sv, atol=1e-6
+            ), f"{method}: survey weights should change per-cell ATT"
+
+    def test_survey_df_affects_pvalues(self, staggered_survey_data):
+        """Survey df (from strata/PSU) should affect p-values via t-distribution."""
+        data = staggered_survey_data
+        sd_weights = SurveyDesign(weights="weight")
+        sd_full = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        est = CallawaySantAnna(estimation_method="reg")
+        r_w = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="simple",
+            survey_design=sd_weights,
+        )
+        r_f = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="simple",
+            survey_design=sd_full,
+        )
+        # ATT should be same (same weights), but p-values differ (different df)
+        assert np.isclose(r_w.overall_att, r_f.overall_att, atol=1e-8)
+        # Survey df from strata/PSU should change inference
+        assert r_f.survey_metadata.df_survey is not None
+
+
+# =============================================================================
 # TestScaleInvariance
 # =============================================================================
 

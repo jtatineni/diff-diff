@@ -234,8 +234,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             _validate_unit_constant_survey,
         )
 
-        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
-            _resolve_survey_for_fit(survey_design, data, "analytical")
+        resolved_survey, survey_weights, _, survey_metadata = _resolve_survey_for_fit(
+            survey_design, data, "analytical"
         )
 
         # Validate within-unit constancy for panel survey designs
