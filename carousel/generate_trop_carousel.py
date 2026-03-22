@@ -354,8 +354,8 @@ class TROPCarouselPDF(FPDF):
         """Slide 2: The Dilemma — which estimator do you trust?
 
         Claims & sources:
-        - Quote "Different assumptions -- difficult to validate or compare
-          in practice": direct from Athey et al. (2025) Section 1, para 1
+        - "Different assumptions that are difficult to validate or even
+          compare in practice": Athey et al. (2025) Section 1, para 1
         - DiD/MC/SC assumption descriptions: REGISTRY.md lines 1309-1312,
           paper Section 2.2 special cases
         """
@@ -399,13 +399,13 @@ class TROPCarouselPDF(FPDF):
             self.set_text_color(*GRAY)
             self.cell(box_w - 30, 10, assumption)
 
-        # Pull quote (italic gold)
+        # Pull quote (italic gold) — exact wording from paper Section 1
         quote_y = start_y + 3 * (box_h + gap) + 6
         self._centered_text(quote_y,
-                            '"Different assumptions -- difficult to',
+                            "Different assumptions that are difficult",
                             size=16, bold=False, italic=True, color=GOLD)
         self._centered_text(quote_y + 17,
-                            'validate or compare in practice"',
+                            "to validate or even compare in practice",
                             size=16, bold=False, italic=True, color=GOLD)
 
         # Attribution
@@ -632,7 +632,7 @@ class TROPCarouselPDF(FPDF):
             ("Factor diagnostics",
              "Estimated factor matrix and effective rank"),
             ("Two methods",
-             "Local (per-observation) or global (faster)"),
+             "Local (per-observation) or global (faster, simultaneous)"),
         ]
 
         margin = 35
