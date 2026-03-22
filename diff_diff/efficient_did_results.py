@@ -18,6 +18,40 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class HausmanPretestResult:
+    """Result of Hausman pretest for PT-All vs PT-Post (Theorem A.1).
+
+    Under H0 (PT-All holds), both estimators are consistent but PT-All
+    is efficient.  Rejection suggests PT-All is too strong; use PT-Post.
+    """
+
+    statistic: float
+    """Hausman H statistic."""
+    p_value: float
+    """Chi-squared p-value."""
+    df: int
+    """Degrees of freedom (effective rank of V)."""
+    reject: bool
+    """True if p_value < alpha."""
+    alpha: float
+    """Significance level used."""
+    att_all: float
+    """Overall ATT under PT-All."""
+    att_post: float
+    """Overall ATT under PT-Post."""
+    recommendation: str
+    """``"pt_all"`` if fail to reject, ``"pt_post"`` if reject, ``"inconclusive"`` if test unavailable."""
+    gt_details: Optional[pd.DataFrame] = None
+    """Per-event-study-horizon details: relative_period, es_all, es_post, delta."""
+
+    def __repr__(self) -> str:
+        return (
+            f"HausmanPretestResult(H={self.statistic:.3f}, p={self.p_value:.4f}, "
+            f"df={self.df}, recommend={self.recommendation})"
+        )
+
+
+@dataclass
 class EfficientDiDResults:
     """
     Results from Efficient DiD (Chen, Sant'Anna & Xie 2025) estimation.
@@ -71,8 +105,10 @@ class EfficientDiDResults:
         ``{(g, t): ndarray}`` — diagnostic: weight vector per target.
     omega_condition_numbers : dict, optional
         ``{(g, t): float}`` — diagnostic: Omega* condition numbers.
-    influence_functions : ndarray, optional
-        Stored EIF matrix for bootstrap / manual SE computation.
+    influence_functions : dict, optional
+        ``{(g, t): ndarray(n_units,)}`` — per-unit EIF values for each
+        group-time cell.  Only populated when ``store_eif=True`` in
+        :meth:`~EfficientDiD.fit` (used internally by ``hausman_pretest``).
     bootstrap_results : EDiDBootstrapResults, optional
         Bootstrap inference results.
     estimation_path : str
@@ -112,7 +148,10 @@ class EfficientDiDResults:
     omega_condition_numbers: Optional[Dict[Tuple[Any, Any], float]] = field(
         default=None, repr=False
     )
-    influence_functions: Optional["np.ndarray"] = field(default=None, repr=False)
+    control_group: str = "never_treated"
+    influence_functions: Optional[Dict[Tuple[Any, Any], "np.ndarray"]] = field(
+        default=None, repr=False
+    )
     bootstrap_results: Optional["EDiDBootstrapResults"] = field(default=None, repr=False)
     estimation_path: str = "nocov"
     sieve_k_max: Optional[int] = None
@@ -151,6 +190,8 @@ class EfficientDiDResults:
             f"{'PT assumption:':<30} {self.pt_assumption:>10}",
             f"{'Estimation path:':<30} {'doubly robust' if self.estimation_path == 'dr' else 'no covariates':>10}",
         ]
+        if self.control_group != "never_treated":
+            lines.append(f"{'Control group:':<30} {self.control_group:>10}")
         if self.anticipation > 0:
             lines.append(f"{'Anticipation periods:':<30} {self.anticipation:>10}")
         if self.n_bootstrap > 0:

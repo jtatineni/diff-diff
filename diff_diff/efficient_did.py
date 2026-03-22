@@ -31,7 +31,7 @@ from diff_diff.efficient_did_covariates import (
     estimate_outcome_regression,
     estimate_propensity_ratio_sieve,
 )
-from diff_diff.efficient_did_results import EfficientDiDResults
+from diff_diff.efficient_did_results import EfficientDiDResults, HausmanPretestResult
 from diff_diff.efficient_did_weights import (
     compute_efficient_weights,
     compute_eif_nocov,
@@ -43,6 +43,90 @@ from diff_diff.utils import safe_inference
 
 # Re-export for convenience
 __all__ = ["EfficientDiD", "EfficientDiDResults", "EDiDBootstrapResults"]
+
+
+def _validate_and_build_cluster_mapping(
+    df: pd.DataFrame,
+    unit: str,
+    cluster: str,
+    all_units: list,
+) -> Tuple[np.ndarray, int]:
+    """Validate cluster column and build unit-to-cluster-index mapping.
+
+    Checks: column exists, no NaN, per-unit constancy, >= 2 clusters.
+    Returns (cluster_indices, n_clusters).
+    """
+    if cluster not in df.columns:
+        raise ValueError(f"Cluster column '{cluster}' not found in data.")
+    if df[cluster].isna().any():
+        raise ValueError(f"Cluster column '{cluster}' contains missing values.")
+    cluster_by_unit = df.groupby(unit)[cluster]
+    if (cluster_by_unit.nunique() > 1).any():
+        raise ValueError(
+            f"Cluster column '{cluster}' varies within unit. "
+            "Cluster assignment must be constant per unit."
+        )
+    cluster_col = cluster_by_unit.first().reindex(all_units).values
+    unique_clusters = np.unique(cluster_col)
+    n_clusters = len(unique_clusters)
+    if n_clusters < 2:
+        raise ValueError(f"Need at least 2 clusters for cluster-robust SEs, got {n_clusters}.")
+    cluster_to_idx = {c: i for i, c in enumerate(unique_clusters)}
+    indices = np.array([cluster_to_idx[c] for c in cluster_col])
+    return indices, n_clusters
+
+
+def _cluster_aggregate(
+    eif_mat: np.ndarray,
+    cluster_indices: np.ndarray,
+    n_clusters: int,
+) -> np.ndarray:
+    """Sum EIF values within clusters and center.
+
+    Parameters
+    ----------
+    eif_mat : ndarray, shape (n_units,) or (n_units, k)
+        EIF values — 1-D for a single estimand, 2-D for multiple.
+    cluster_indices : ndarray, shape (n_units,)
+        Integer cluster assignment per unit.
+    n_clusters : int
+        Number of unique clusters.
+
+    Returns
+    -------
+    ndarray, shape (n_clusters,) or (n_clusters, k)
+        Centered cluster-level sums.
+    """
+    if eif_mat.ndim == 1:
+        sums = np.bincount(cluster_indices, weights=eif_mat, minlength=n_clusters).astype(float)
+    else:
+        sums = np.column_stack(
+            [
+                np.bincount(cluster_indices, weights=eif_mat[:, j], minlength=n_clusters)
+                for j in range(eif_mat.shape[1])
+            ]
+        ).astype(float)
+    return sums - sums.mean(axis=0)
+
+
+def _compute_se_from_eif(
+    eif: np.ndarray,
+    n_units: int,
+    cluster_indices: Optional[np.ndarray] = None,
+    n_clusters: Optional[int] = None,
+) -> float:
+    """SE from EIF values, optionally with cluster-robust correction.
+
+    Without clusters: ``sqrt(mean(EIF^2) / n)``.
+    With clusters: Liang-Zeger sandwich — aggregate EIF within clusters,
+    center, and apply G/(G-1) small-sample correction.
+    """
+    if cluster_indices is not None and n_clusters is not None:
+        centered = _cluster_aggregate(eif, cluster_indices, n_clusters)
+        correction = n_clusters / (n_clusters - 1) if n_clusters > 1 else 1.0
+        var = correction * np.sum(centered**2) / (n_units**2)
+        return float(np.sqrt(max(var, 0.0)))
+    return float(np.sqrt(np.mean(eif**2) / n_units))
 
 
 class EfficientDiD(EfficientDiDBootstrapMixin):
@@ -70,8 +154,17 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
     alpha : float, default 0.05
         Significance level.
     cluster : str or None
-        Column name for cluster-robust SEs (not yet implemented —
-        currently only unit-level inference).
+        Column name for cluster-robust SEs.  When set, analytical SEs
+        use the Liang-Zeger clustered sandwich estimator on EIF values.
+        With ``n_bootstrap > 0``, bootstrap weights are generated at the
+        cluster level (all units in a cluster share the same weight).
+    control_group : str, default ``"never_treated"``
+        Which units serve as the comparison group:
+        ``"never_treated"`` requires a never-treated cohort (raises if
+        none exist); ``"last_cohort"`` reclassifies the latest treatment
+        cohort as pseudo-never-treated and drops post-treatment periods
+        for that cohort.  Distinct from CallawaySantAnna's
+        ``"not_yet_treated"`` — see REGISTRY.md for details.
     n_bootstrap : int, default 0
         Number of multiplier bootstrap iterations (0 = analytical only).
     bootstrap_weights : str, default ``"rademacher"``
@@ -106,6 +199,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         pt_assumption: str = "all",
         alpha: float = 0.05,
         cluster: Optional[str] = None,
+        control_group: str = "never_treated",
         n_bootstrap: int = 0,
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
@@ -115,14 +209,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         ratio_clip: float = 20.0,
         kernel_bandwidth: Optional[float] = None,
     ):
-        if cluster is not None:
-            raise NotImplementedError(
-                "Cluster-robust SEs are not yet implemented for EfficientDiD. "
-                "Use n_bootstrap > 0 for bootstrap inference instead."
-            )
         self.pt_assumption = pt_assumption
         self.alpha = alpha
         self.cluster = cluster
+        self.control_group = control_group
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
@@ -140,6 +230,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         """Validate constrained parameters."""
         if self.pt_assumption not in ("all", "post"):
             raise ValueError(f"pt_assumption must be 'all' or 'post', got '{self.pt_assumption}'")
+        if self.control_group not in ("never_treated", "last_cohort"):
+            raise ValueError(
+                f"control_group must be 'never_treated' or 'last_cohort', "
+                f"got '{self.control_group}'"
+            )
         valid_weights = ("rademacher", "mammen", "webb")
         if self.bootstrap_weights not in valid_weights:
             raise ValueError(
@@ -174,6 +269,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             "anticipation": self.anticipation,
             "alpha": self.alpha,
             "cluster": self.cluster,
+            "control_group": self.control_group,
             "n_bootstrap": self.n_bootstrap,
             "bootstrap_weights": self.bootstrap_weights,
             "seed": self.seed,
@@ -206,6 +302,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
         survey_design: Optional[Any] = None,
+        store_eif: bool = False,
     ) -> EfficientDiDResults:
         """Fit the Efficient DiD estimator.
 
@@ -235,7 +332,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             Survey design specification for design-based inference.
             Applies survey weights to all means, covariances, and cohort
             fractions, and uses Taylor Series Linearization for SE
-            estimation.
+            estimation.  Cannot be combined with ``cluster``.
+        store_eif : bool, default False
+            Store per-(g,t) EIF vectors in the results object.  Used
+            internally by :meth:`hausman_pretest`; not needed for
+            normal usage.
 
         Returns
         -------
@@ -250,6 +351,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             If ``n_bootstrap > 0`` with ``survey_design``.
         """
         self._validate_params()
+
+        if self.cluster is not None and survey_design is not None:
+            raise NotImplementedError(
+                "cluster and survey_design cannot both be set. "
+                "Use survey_design with PSU/strata for cluster-robust inference."
+            )
 
         # Resolve survey design if provided
         from diff_diff.survey import _resolve_survey_for_fit
@@ -358,13 +465,32 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         n_treated_units = int((unit_info[first_treat] > 0).sum())
         n_control_units = int(unit_info["_never_treated"].sum())
 
-        # Check for never-treated units — required for generated outcomes
-        # (the formula's second term mean(Y_t - Y_{t_pre} | G=inf) needs G=inf)
-        if n_control_units == 0:
+        # Control group logic
+        if self.control_group == "last_cohort":
+            # Always reclassify last cohort as pseudo-control when requested
+            if not treatment_groups:
+                raise ValueError(
+                    "No treated cohorts found. control_group='last_cohort' requires "
+                    "at least 2 treatment cohorts."
+                )
+            last_g = max(treatment_groups)
+            treatment_groups = [g for g in treatment_groups if g != last_g]
+            if not treatment_groups:
+                raise ValueError("Only one treatment cohort; cannot use last_cohort control.")
+            effective_last = last_g - self.anticipation
+            time_periods = [t for t in time_periods if t < effective_last]
+            if len(time_periods) < 2:
+                raise ValueError(
+                    "Fewer than 2 time periods remain after trimming for last_cohort control."
+                )
+            unit_info.loc[unit_info[first_treat] == last_g, first_treat] = 0
+            unit_info.loc[unit_info[first_treat] == 0, "_never_treated"] = True
+            n_treated_units = int((unit_info[first_treat] > 0).sum())
+            n_control_units = int(unit_info["_never_treated"].sum())
+        elif n_control_units == 0:
             raise ValueError(
-                "No never-treated units found. EfficientDiD Phase 1 requires a "
-                "never-treated comparison group. The 'last cohort as control' "
-                "fallback will be added in a future version."
+                "No never-treated units found. Use control_group='last_cohort' "
+                "to use the last treatment cohort as a pseudo-control."
             )
 
         # ----- Prepare data -----
@@ -410,6 +536,23 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             self._survey_df = self._unit_resolved_survey.df_survey
         else:
             self._unit_resolved_survey = None
+
+        # Build cluster mapping if cluster-robust SEs requested
+        if self.cluster is not None:
+            unit_cluster_indices, n_clusters = _validate_and_build_cluster_mapping(
+                df, unit, self.cluster, all_units
+            )
+            if n_clusters < 50:
+                warnings.warn(
+                    f"Only {n_clusters} clusters. Analytical clustered SEs may "
+                    "be unreliable. Consider n_bootstrap > 0 for cluster "
+                    "bootstrap inference.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        else:
+            unit_cluster_indices = None
+            n_clusters = None
 
         period_to_col = {p: i for i, p in enumerate(time_periods)}
         period_1 = time_periods[0]
@@ -457,6 +600,25 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             for g in treatment_groups:
                 cohort_fractions[g] = float(np.sum(cohort_masks[g])) / n_units
             cohort_fractions[np.inf] = float(np.sum(never_treated_mask)) / n_units
+
+        # ----- Small cohort warnings -----
+        for g in treatment_groups:
+            n_g = int(np.sum(cohort_masks[g]))
+            frac_g = cohort_fractions[g]
+            if n_g < 2:
+                warnings.warn(
+                    f"Cohort {g} has only {n_g} unit. Omega* inversion and "
+                    "EIF computation may be numerically unstable.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            elif frac_g < 0.01:
+                warnings.warn(
+                    f"Cohort {g} represents {frac_g:.1%} of the sample (< 1%). "
+                    "Efficient weights may be imprecise.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # ----- Covariate preparation (if provided) -----
         covariate_matrix: Optional[np.ndarray] = None
@@ -728,7 +890,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 if self._unit_resolved_survey is not None:
                     se_gt = self._compute_survey_eif_se(eif_vals)
                 else:
-                    se_gt = float(np.sqrt(np.mean(eif_vals**2) / n_units))
+                    se_gt = _compute_se_from_eif(
+                        eif_vals, n_units, unit_cluster_indices, n_clusters
+                    )
 
                 t_stat, p_val, ci = safe_inference(
                     att_gt, se_gt, alpha=self.alpha, df=self._survey_df
@@ -752,7 +916,13 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
         # ----- Aggregation -----
         overall_att, overall_se = self._aggregate_overall(
-            group_time_effects, eif_by_gt, n_units, cohort_fractions, unit_cohorts
+            group_time_effects,
+            eif_by_gt,
+            n_units,
+            cohort_fractions,
+            unit_cohorts,
+            cluster_indices=unit_cluster_indices,
+            n_clusters=n_clusters,
         )
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att, overall_se, alpha=self.alpha, df=self._survey_df
@@ -771,6 +941,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 time_periods,
                 balance_e,
                 unit_cohorts=unit_cohorts,
+                cluster_indices=unit_cluster_indices,
+                n_clusters=n_clusters,
             )
         if aggregate in ("group", "all"):
             group_effects = self._aggregate_by_group(
@@ -780,6 +952,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 cohort_fractions,
                 treatment_groups,
                 unit_cohorts=unit_cohorts,
+                cluster_indices=unit_cluster_indices,
+                n_clusters=n_clusters,
             )
 
         # ----- Bootstrap -----
@@ -793,6 +967,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 balance_e=balance_e,
                 treatment_groups=treatment_groups,
                 cohort_fractions=cohort_fractions,
+                cluster_indices=unit_cluster_indices,
+                n_clusters=n_clusters,
             )
             # Update estimates with bootstrap inference
             overall_se = bootstrap_results.overall_att_se
@@ -855,7 +1031,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             overall_conf_int=overall_ci,
             groups=treatment_groups,
             time_periods=time_periods,
-            n_obs=len(df),
+            n_obs=n_units * len(time_periods),
             n_treated_units=n_treated_units,
             n_control_units=n_control_units,
             alpha=self.alpha,
@@ -868,7 +1044,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             group_effects=group_effects,
             efficient_weights=stored_weights if stored_weights else None,
             omega_condition_numbers=stored_cond if stored_cond else None,
-            influence_functions=None,  # can store full EIF matrix if needed
+            control_group=self.control_group,
+            influence_functions=eif_by_gt if store_eif else None,
             bootstrap_results=bootstrap_results,
             estimation_path="dr" if use_covariates else "nocov",
             sieve_k_max=self.sieve_k_max,
@@ -910,15 +1087,21 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         vcov = compute_survey_vcov(X_ones, eif_vals, self._unit_resolved_survey)
         return float(np.sqrt(np.abs(vcov[0, 0])))
 
-    def _eif_se(self, eif_vals: np.ndarray, n_units: int) -> float:
+    def _eif_se(
+        self,
+        eif_vals: np.ndarray,
+        n_units: int,
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
+    ) -> float:
         """Compute SE from aggregated EIF scores.
 
         Dispatches to survey TSL when ``_unit_resolved_survey`` is set
-        (during fit), otherwise uses the standard analytical formula.
+        (during fit), otherwise uses cluster-robust or standard formula.
         """
         if self._unit_resolved_survey is not None:
             return self._compute_survey_eif_se(eif_vals)
-        return float(np.sqrt(np.mean(eif_vals**2) / n_units))
+        return _compute_se_from_eif(eif_vals, n_units, cluster_indices, n_clusters)
 
     # -- Aggregation helpers --------------------------------------------------
 
@@ -977,6 +1160,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         n_units: int,
         cohort_fractions: Dict[float, float],
         unit_cohorts: np.ndarray,
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
     ) -> Tuple[float, float]:
         """Compute overall ATT with WIF-adjusted SE.
 
@@ -1024,8 +1209,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         agg_eif_total = agg_eif + wif  # both O(1) scale
 
         # SE = sqrt(mean(EIF^2) / n) — standard IF-based SE
-        # (dispatches to survey TSL when survey context is active)
-        se = self._eif_se(agg_eif_total, n_units)
+        # (dispatches to survey TSL or cluster-robust when active)
+        se = self._eif_se(agg_eif_total, n_units, cluster_indices, n_clusters)
 
         return overall_att, se
 
@@ -1039,6 +1224,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         time_periods: List[Any],
         balance_e: Optional[int] = None,
         unit_cohorts: Optional[np.ndarray] = None,
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
     ) -> Dict[int, Dict[str, Any]]:
         """Aggregate ATT(g,t) by relative time e = t - g.
 
@@ -1117,7 +1304,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 )
                 agg_eif = agg_eif + wif
 
-            agg_se = self._eif_se(agg_eif, n_units)
+            agg_se = self._eif_se(agg_eif, n_units, cluster_indices, n_clusters)
 
             t_stat, p_val, ci = safe_inference(
                 agg_eff, agg_se, alpha=self.alpha, df=self._survey_df
@@ -1141,6 +1328,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         cohort_fractions: Dict[float, float],
         treatment_groups: List[Any],
         unit_cohorts: Optional[np.ndarray] = None,
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
     ) -> Dict[Any, Dict[str, Any]]:
         """Aggregate ATT(g,t) by treatment cohort.
 
@@ -1179,7 +1368,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             agg_eif = np.zeros(n_units)
             for k, gt in enumerate(g_gts):
                 agg_eif += w[k] * eif_by_gt[gt]
-            agg_se = self._eif_se(agg_eif, n_units)
+            agg_se = self._eif_se(agg_eif, n_units, cluster_indices, n_clusters)
 
             t_stat, p_val, ci = safe_inference(
                 agg_eff, agg_se, alpha=self.alpha, df=self._survey_df
@@ -1205,3 +1394,263 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
     def print_summary(self) -> None:
         """Print summary to stdout."""
         print(self.summary())
+
+    # -- Hausman pretest -------------------------------------------------------
+
+    @classmethod
+    def hausman_pretest(
+        cls,
+        data: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        covariates: Optional[List[str]] = None,
+        cluster: Optional[str] = None,
+        anticipation: int = 0,
+        control_group: str = "never_treated",
+        alpha: float = 0.05,
+        **nuisance_kwargs: Any,
+    ) -> HausmanPretestResult:
+        """Hausman pretest for PT-All vs PT-Post (Theorem A.1).
+
+        Fits the estimator under both parallel trends assumptions and
+        compares the results.  Under H0 (PT-All holds), both are consistent
+        but PT-All is more efficient.  Rejection suggests PT-All is too
+        strong; use PT-Post instead.
+
+        Parameters
+        ----------
+        data, outcome, unit, time, first_treat, covariates
+            Same as :meth:`fit`.
+        cluster : str, optional
+            Cluster column for cluster-robust covariance.
+        anticipation : int
+            Anticipation periods.
+        control_group : str
+            ``"never_treated"`` or ``"last_cohort"``.
+        alpha : float
+            Significance level for the test.
+        **nuisance_kwargs
+            Passed to both fits (e.g. ``sieve_k_max``, ``ratio_clip``).
+
+        Returns
+        -------
+        HausmanPretestResult
+        """
+        from scipy.stats import chi2
+
+        # Fit under both assumptions (analytical SEs only, no bootstrap)
+        common_kwargs = dict(
+            cluster=cluster,
+            control_group=control_group,
+            anticipation=anticipation,
+            n_bootstrap=0,
+            **nuisance_kwargs,
+        )
+        fit_kwargs = dict(
+            data=data,
+            outcome=outcome,
+            unit=unit,
+            time=time,
+            first_treat=first_treat,
+            covariates=covariates,
+            aggregate=None,
+        )
+
+        edid_all = cls(pt_assumption="all", alpha=alpha, **common_kwargs)
+        result_all = edid_all.fit(**fit_kwargs, store_eif=True)
+
+        edid_post = cls(pt_assumption="post", alpha=alpha, **common_kwargs)
+        result_post = edid_post.fit(**fit_kwargs, store_eif=True)
+
+        # Find common (g,t) pairs — PT-Post pairs are a subset of PT-All
+        common_gts = sorted(
+            set(result_all.group_time_effects.keys()) & set(result_post.group_time_effects.keys())
+        )
+
+        def _nan_result() -> HausmanPretestResult:
+            return HausmanPretestResult(
+                statistic=np.nan,
+                p_value=np.nan,
+                df=0,
+                reject=False,
+                alpha=alpha,
+                att_all=result_all.overall_att,
+                att_post=result_post.overall_att,
+                recommendation="inconclusive",
+                gt_details=None,
+            )
+
+        if not common_gts:
+            return _nan_result()
+
+        eif_all = result_all.influence_functions
+        eif_post = result_post.influence_functions
+        assert eif_all is not None and eif_post is not None
+        n_units = len(next(iter(eif_all.values())))
+
+        # --- Aggregate to post-treatment ES(e) per Theorem A.1 ---
+        # Derive cohort fractions from data for proper weights
+        all_units_list = sorted(data[unit].unique())
+        unit_cohorts = (
+            data.groupby(unit)[first_treat].first().reindex(all_units_list).values.astype(float)
+        )
+        cohort_fractions: Dict[float, float] = {}
+        for g in set(result_all.groups) | set(result_post.groups):
+            cohort_fractions[g] = float(np.sum(unit_cohorts == g)) / n_units
+
+        def _aggregate_es(
+            gt_effects: Dict, eif_dict: Dict, groups: List, ant: int
+        ) -> Dict[int, Tuple[float, np.ndarray]]:
+            """Aggregate (g,t) effects to post-treatment ES(e) with WIF-corrected EIF."""
+            by_e: Dict[int, List[Tuple[Tuple, float, float, np.ndarray]]] = {}
+            for (g, t), d in gt_effects.items():
+                e = int(t - g)
+                if e < -ant:
+                    continue
+                if not np.isfinite(d["effect"]):
+                    continue
+                if (g, t) not in eif_dict:
+                    continue
+                eif_vec = eif_dict[(g, t)]
+                if not np.all(np.isfinite(eif_vec)):
+                    continue
+                pg = cohort_fractions.get(g, 0.0)
+                if e not in by_e:
+                    by_e[e] = []
+                by_e[e].append(((g, t), d["effect"], pg, eif_vec))
+
+            result: Dict[int, Tuple[float, np.ndarray]] = {}
+            for e, items in by_e.items():
+                if e < 0:
+                    continue
+                effs = np.array([x[1] for x in items])
+                pgs = np.array([x[2] for x in items])
+                eifs = [x[3] for x in items]
+                gt_pairs_e = [x[0] for x in items]
+                total_pg = pgs.sum()
+                w = pgs / total_pg if total_pg > 0 else np.ones(len(pgs)) / len(pgs)
+                es_eff = float(np.sum(w * effs))
+                es_eif = np.zeros(n_units)
+                for k_idx in range(len(eifs)):
+                    es_eif += w[k_idx] * eifs[k_idx]
+                # WIF correction for estimated cohort-size weights
+                groups_e = np.array([g for (g, t) in gt_pairs_e])
+                pg_e = np.array([cohort_fractions.get(g, 0.0) for g, t in gt_pairs_e])
+                sum_pg = pg_e.sum()
+                if sum_pg > 0:
+                    indicator = (unit_cohorts[:, None] == groups_e[None, :]).astype(float)
+                    indicator_sum = np.sum(indicator - pg_e, axis=1)
+                    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                        if1 = (indicator - pg_e) / sum_pg
+                        if2 = np.outer(indicator_sum, pg_e) / sum_pg**2
+                        wif = (if1 - if2) @ effs
+                    es_eif = es_eif + wif
+                result[e] = (es_eff, es_eif)
+            return result
+
+        es_all = _aggregate_es(
+            result_all.group_time_effects, eif_all, result_all.groups, anticipation
+        )
+        es_post = _aggregate_es(
+            result_post.group_time_effects, eif_post, result_post.groups, anticipation
+        )
+
+        # Find common post-treatment horizons
+        common_e = sorted(set(es_all.keys()) & set(es_post.keys()))
+        if not common_e:
+            return _nan_result()
+
+        delta = np.array([es_post[e][0] - es_all[e][0] for e in common_e])
+
+        # Build ES(e)-level EIF matrices
+        eif_all_mat = np.column_stack([es_all[e][1] for e in common_e])
+        eif_post_mat = np.column_stack([es_post[e][1] for e in common_e])
+
+        # Filter units with non-finite EIF values
+        row_finite = np.all(np.isfinite(eif_all_mat), axis=1) & np.all(
+            np.isfinite(eif_post_mat), axis=1
+        )
+        cl_idx: Optional[np.ndarray] = None
+        n_cl: Optional[int] = None
+        if cluster is not None:
+            cl_idx, n_cl = _validate_and_build_cluster_mapping(data, unit, cluster, all_units_list)
+        if not np.all(row_finite):
+            eif_all_mat = eif_all_mat[row_finite]
+            eif_post_mat = eif_post_mat[row_finite]
+            n_units = int(np.sum(row_finite))
+            if cl_idx is not None:
+                cl_idx = cl_idx[row_finite]
+
+        # Compute full covariance matrices
+        if cl_idx is not None and n_cl is not None:
+
+            def _eif_cov(eif_mat: np.ndarray) -> np.ndarray:
+                centered = _cluster_aggregate(eif_mat, cl_idx, n_cl)
+                correction = n_cl / (n_cl - 1) if n_cl > 1 else 1.0
+                return correction * (centered.T @ centered) / (n_units**2)
+
+            cov_all = _eif_cov(eif_all_mat)
+            cov_post = _eif_cov(eif_post_mat)
+        else:
+            with np.errstate(over="ignore", invalid="ignore"):
+                cov_all = (eif_all_mat.T @ eif_all_mat) / (n_units**2)
+                cov_post = (eif_post_mat.T @ eif_post_mat) / (n_units**2)
+
+        V = cov_post - cov_all
+
+        if not np.all(np.isfinite(V)):
+            warnings.warn(
+                "Hausman covariance matrix contains non-finite values. " "The test is unreliable.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return _nan_result()
+
+        # Eigendecompose V — check for non-PSD
+        eigvals = np.linalg.eigvalsh(V)
+        max_eigval = np.max(np.abs(eigvals)) if len(eigvals) > 0 else 0.0
+        tol = max(1e-10 * max_eigval, 1e-15)
+
+        n_negative = int(np.sum(eigvals < -tol))
+        if n_negative > 0:
+            warnings.warn(
+                f"Hausman variance-difference matrix V has {n_negative} "
+                "substantially negative eigenvalue(s). The test may be "
+                "unreliable (finite-sample efficiency reversal).",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        effective_rank = int(np.sum(eigvals > tol))
+        if effective_rank == 0:
+            return _nan_result()
+
+        V_pinv = np.linalg.pinv(V, rcond=tol / max_eigval if max_eigval > 0 else 1e-10)
+        H = float(delta @ V_pinv @ delta)
+        H = max(H, 0.0)
+
+        p_value = float(chi2.sf(H, df=effective_rank))
+        reject = p_value < alpha
+
+        es_details = pd.DataFrame(
+            {
+                "relative_period": common_e,
+                "es_all": [es_all[e][0] for e in common_e],
+                "es_post": [es_post[e][0] for e in common_e],
+                "delta": delta,
+            }
+        )
+
+        return HausmanPretestResult(
+            statistic=H,
+            p_value=p_value,
+            df=effective_rank,
+            reject=reject,
+            alpha=alpha,
+            att_all=result_all.overall_att,
+            att_post=result_post.overall_att,
+            recommendation="pt_post" if reject else "pt_all",
+            gt_details=es_details,
+        )
