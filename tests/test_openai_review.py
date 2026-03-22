@@ -754,22 +754,24 @@ class TestParseReviewFindings:
             "## Summary\n"
             "Overall assessment: Looks good\n"
         )
-        findings = review_mod.parse_review_findings(review_text, 1)
+        findings, uncertain = review_mod.parse_review_findings(review_text, 1)
         assert len(findings) >= 2
+        assert not uncertain
         severities = {f["severity"] for f in findings}
         assert "P1" in severities
         assert "P2" in severities
 
     def test_empty_review(self, review_mod):
-        findings = review_mod.parse_review_findings("No issues found.", 1)
+        findings, uncertain = review_mod.parse_review_findings("No issues found.", 1)
         assert findings == []
+        assert not uncertain
 
     def test_finding_ids_follow_format(self, review_mod):
         review_text = (
             "**P0** Critical bug in `foo.py:L1`\n"
             "**P1** Minor issue in the code\n"
         )
-        findings = review_mod.parse_review_findings(review_text, 2)
+        findings, _ = review_mod.parse_review_findings(review_text, 2)
         for f in findings:
             assert f["id"].startswith("R2-")
             assert f["status"] == "open"
@@ -777,23 +779,51 @@ class TestParseReviewFindings:
     def test_parses_bold_severity_format(self, review_mod):
         """**P1** format should be parsed."""
         review_text = "**P1** Missing NaN guard in `foo.py:L10`\n"
-        findings = review_mod.parse_review_findings(review_text, 1)
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
         assert len(findings) == 1
         assert findings[0]["severity"] == "P1"
 
     def test_parses_bold_label_format(self, review_mod):
         """**Severity:** P1 format should be parsed."""
         review_text = "- **Severity:** P1 — Missing NaN guard in `foo.py:L10`\n"
-        findings = review_mod.parse_review_findings(review_text, 1)
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
         assert len(findings) == 1
         assert findings[0]["severity"] == "P1"
 
     def test_parses_plain_label_format(self, review_mod):
         """Severity: P2 format should be parsed."""
         review_text = "Severity: P2 — Unused import in `bar.py:L5`\n"
-        findings = review_mod.parse_review_findings(review_text, 1)
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
         assert len(findings) == 1
         assert findings[0]["severity"] == "P2"
+
+    def test_parses_multiline_finding_block(self, review_mod):
+        """Multi-line finding blocks (Severity/Impact on separate lines)."""
+        review_text = (
+            "## Code Quality\n\n"
+            "- **Severity:** P1\n"
+            "  **Impact:** Missing NaN guard causes silent incorrect output\n"
+            "  **Location:** `diff_diff/staggered.py:L145`\n"
+            "  **Concrete fix:** Use safe_inference()\n"
+        )
+        findings, uncertain = review_mod.parse_review_findings(review_text, 1)
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "P1"
+        assert "NaN guard" in findings[0]["summary"]
+        assert not uncertain
+
+    def test_zero_findings_with_markers_sets_uncertain(self, review_mod):
+        """When severity markers exist but parsing yields nothing, flag uncertainty."""
+        # Markers in code blocks or unusual format the parser can't handle
+        review_text = (
+            "The review found **P1** issues but in a format\n"
+            "that the block parser cannot delimit properly because\n"
+            "there are no standard block boundaries.\n"
+        )
+        findings, uncertain = review_mod.parse_review_findings(review_text, 1)
+        # Parser may or may not extract this — but if it fails:
+        if not findings:
+            assert uncertain
 
     def test_ignores_multi_severity_prose(self, review_mod):
         """Lines like 'P2/P3 items may exist' should not be parsed as findings."""
@@ -801,7 +831,7 @@ class TestParseReviewFindings:
             "P2/P3 items may exist. A PR does NOT need to be perfect.\n"
             "If all previous P1+ findings are resolved, assessment should be good.\n"
         )
-        findings = review_mod.parse_review_findings(review_text, 1)
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
         assert findings == []
 
     def test_ignores_assessment_lines(self, review_mod):
@@ -811,7 +841,7 @@ class TestParseReviewFindings:
             "⚠️ Needs changes — One or more P1 (no P0s)\n"
             "✅ Looks good — No unmitigated P0 or P1 findings.\n"
         )
-        findings = review_mod.parse_review_findings(review_text, 1)
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
         assert findings == []
 
     def test_ignores_table_rows(self, review_mod):
@@ -820,7 +850,7 @@ class TestParseReviewFindings:
             "| R1-P1-1 | P1 | Methodology | Missing NaN guard | foo.py:L10 | open |\n"
             "| R1-P2-1 | P2 | Code Quality | Unused import | bar.py:L5 | addressed |\n"
         )
-        findings = review_mod.parse_review_findings(review_text, 2)
+        findings, _ = review_mod.parse_review_findings(review_text, 2)
         assert findings == []
 
     def test_ignores_instructional_text(self, review_mod):
@@ -829,7 +859,7 @@ class TestParseReviewFindings:
             "Focus on whether previous P0/P1 findings have been addressed.\n"
             "If all previous P1+ findings are resolved, the assessment should be good.\n"
         )
-        findings = review_mod.parse_review_findings(review_text, 1)
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
         assert findings == []
 
 
@@ -936,3 +966,90 @@ class TestMergeFindings:
         addressed = [f for f in merged if f["status"] == "addressed"]
         assert len(open_findings) == 1
         assert len(addressed) == 1
+
+    def test_same_summary_different_files_no_cross_match(self, review_mod):
+        """Two findings with same summary but different files should NOT cross-match."""
+        previous = [
+            {"id": "R1-P1-1", "severity": "P1", "location": "foo.py:L10",
+             "section": "Code Quality", "summary": "Missing NaN guard in estimator",
+             "status": "open"},
+        ]
+        current = [
+            {"id": "R2-P1-1", "severity": "P1", "location": "bar.py:L20",
+             "section": "Code Quality", "summary": "Missing NaN guard in estimator",
+             "status": "open"},
+        ]
+        merged = review_mod.merge_findings(previous, current)
+        open_findings = [f for f in merged if f["status"] == "open"]
+        addressed = [f for f in merged if f["status"] == "addressed"]
+        # Different files: previous should be addressed, current stays open
+        assert len(open_findings) == 1
+        assert open_findings[0]["location"] == "bar.py:L20"
+        assert len(addressed) == 1
+        assert addressed[0]["location"] == "foo.py:L10"
+
+
+# ---------------------------------------------------------------------------
+# estimate_cost — prefix matching regression
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateCostPrefixRegression:
+    def test_mini_model_gets_mini_pricing(self, review_mod):
+        """gpt-4.1-mini snapshot should get mini pricing, not parent gpt-4.1."""
+        mini_cost = review_mod.estimate_cost(1_000_000, 1_000_000, "gpt-4.1-mini-2025-04-14")
+        parent_cost = review_mod.estimate_cost(1_000_000, 1_000_000, "gpt-4.1")
+        assert mini_cost is not None
+        assert parent_cost is not None
+        # Mini should be cheaper than parent
+        assert mini_cost != parent_cost
+
+    def test_o3_mini_gets_mini_pricing(self, review_mod):
+        """o3-mini snapshot should get o3-mini pricing, not o3."""
+        mini_cost = review_mod.estimate_cost(1_000_000, 1_000_000, "o3-mini-2025-01-31")
+        parent_cost = review_mod.estimate_cost(1_000_000, 1_000_000, "o3")
+        assert mini_cost is not None
+        assert parent_cost is not None
+        assert mini_cost != parent_cost
+
+
+# ---------------------------------------------------------------------------
+# Delta context derivation
+# ---------------------------------------------------------------------------
+
+
+class TestDeltaContextDerivation:
+    def test_delta_files_resolve_only_delta(self, review_mod, repo_root):
+        """resolve_changed_source_files with delta file list returns only delta files."""
+        # Simulate: full branch changed bacon.py and staggered.py, but delta only has bacon.py
+        delta_text = "M\tdiff_diff/bacon.py"
+        paths = review_mod.resolve_changed_source_files(delta_text, repo_root)
+        filenames = [os.path.basename(p) for p in paths]
+        assert "bacon.py" in filenames
+        # staggered.py should NOT be in the result (it's not in delta)
+        assert "staggered.py" not in filenames
+
+
+# ---------------------------------------------------------------------------
+# Review state — branch/base validation support
+# ---------------------------------------------------------------------------
+
+
+class TestReviewStateBranchValidation:
+    def test_stores_and_retrieves_branch_and_base(self, review_mod, tmp_path):
+        """write_review_state stores branch/base; parse_review_state returns them."""
+        path = str(tmp_path / "review-state.json")
+        review_mod.write_review_state(
+            path=path,
+            commit_sha="abc123",
+            base_ref="main",
+            branch="feature/test",
+            review_round=1,
+            findings=[],
+        )
+        # Read back and verify fields are present
+        import json
+        with open(path) as f:
+            data = json.load(f)
+        assert data["branch"] == "feature/test"
+        assert data["base_ref"] == "main"

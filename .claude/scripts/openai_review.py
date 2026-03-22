@@ -403,175 +403,241 @@ def write_review_state(
         json.dump(state, f, indent=2)
 
 
+_BLOCK_START = re.compile(
+    r"^-?\s*\*\*(P[0-3])\*\*"              # - **P1** summary
+    r"|^-?\s*\*\*Severity:\*\*\s*(P[0-3])"  # - **Severity:** P1
+    r"|^-?\s*\*\*Severity:\s*(P[0-3])\*\*"  # - **Severity: P1**
+    r"|^-?\s*Severity:\s*`?(P[0-3])`?"      # - Severity: P1
+)
+
+_IMPACT_PATTERN = re.compile(r"\*\*Impact:\*\*\s*(.+)")
+
+_LOCATION_PATTERN = re.compile(
+    r"(?:`?)([\w/._-]+\.py(?::L?\d+(?:-L?\d+)?)?)(?:`?)"
+)
+
+# Lines to skip when checking if a severity line is a real finding
+_SKIP_PHRASES = [
+    "findings are resolved", "findings have been addressed",
+    "should be marked", "assessment should be",
+    "does NOT need", "do NOT need",
+    "P1+ findings", "P0/P1 findings",
+]
+_SKIP_MARKERS = ["\u26d4", "\u26a0\ufe0f", "\u2705", "Blocker", "Needs changes",
+                 "Looks good", "Path to Approval"]
+
+
+def _should_skip_line(line: str) -> bool:
+    """Return True if the line is not a real finding."""
+    stripped = line.strip()
+    if stripped.startswith("|") and stripped.endswith("|"):
+        return True
+    if re.search(r"P\d[/+]P\d", line):
+        return True
+    if any(m in line for m in _SKIP_MARKERS):
+        return True
+    if any(p in line for p in _SKIP_PHRASES):
+        return True
+    return False
+
+
 def parse_review_findings(
     review_text: str, review_round: int
-) -> "list[dict]":
-    """Parse AI review output for structured findings.
+) -> "tuple[list[dict], bool]":
+    """Parse AI review output for structured findings using block-based parsing.
 
-    Extracts P0/P1/P2/P3 items with severity, section, summary, and location.
-    Only parses lines where the severity appears in bold (**P1**) or as a
-    labeled field (Severity: P1) to avoid ingesting instructional prose,
-    assessment criteria, or previous-findings tables.
+    Supports both single-line findings (**P1** summary) and multi-line blocks
+    (Severity/Impact/Concrete fix on separate lines).
+
+    Returns (findings, parse_uncertain) where parse_uncertain is True when
+    severity markers exist in the text but no findings could be parsed.
     """
-    findings: list[dict] = []
-    counters: dict[str, int] = {}
-
-    # Only match severity in explicit finding formats:
-    # - **P1** or **P0:** (bold severity, as used in review output)
-    # - **Severity:** P1 (bold label, severity after closing **)
-    # - Severity: P1 (plain labeled field)
-    # - - **Severity:** P1 (bullet with labeled field)
-    finding_sev_pattern = re.compile(
-        r"\*\*(P[0-3])\*\*"                        # **P1**
-        r"|\*\*Severity:\*\*\s*(P[0-3])"           # **Severity:** P1
-        r"|\*\*Severity:\s*(P[0-3])\*\*"           # **Severity: P1**
-        r"|(?<!\*)Severity:\s*(P[0-3])(?!\*)"       # Severity: P1 (not inside bold)
-    )
-    # Match file:line references like "diff_diff/foo.py:L123" or "foo.py:L45-L67"
-    location_pattern = re.compile(
-        r"(?:`?)([\w/]+\.py(?::L?\d+(?:-L?\d+)?)?)(?:`?)"
-    )
-
-    # Track which section we're in
+    # Pass 1: collect blocks
+    blocks: list[tuple[str, str, list[str]]] = []  # (severity, section, lines)
     current_section = "General"
+    current_block: "list[str] | None" = None
+    current_severity = ""
+    current_block_section = ""
+
     for line in review_text.splitlines():
         # Detect section headings
         if line.startswith("## ") or line.startswith("### "):
+            # Flush current block
+            if current_block is not None:
+                blocks.append((current_severity, current_block_section, current_block))
+                current_block = None
             heading = line.lstrip("#").strip()
             if heading and "summary" not in heading.lower():
                 current_section = heading
-
-        # Skip table rows (finding tables from previous reviews)
-        stripped = line.strip()
-        if stripped.startswith("|") and stripped.endswith("|"):
-            continue
-        # Skip lines referencing multiple severities in passing (e.g., "P2/P3 items")
-        if re.search(r"P\d[/+]P\d", line):
-            continue
-        # Skip assessment criteria lines
-        if any(
-            marker in line
-            for marker in [
-                "\u26d4", "\u26a0\ufe0f", "\u2705",
-                "Blocker", "Needs changes", "Looks good",
-                "Path to Approval",
-            ]
-        ):
-            continue
-        # Skip instructional/guidance lines
-        if any(
-            phrase in line
-            for phrase in [
-                "findings are resolved",
-                "findings have been addressed",
-                "should be marked",
-                "assessment should be",
-                "does NOT need",
-                "do NOT need",
-                "P1+ findings",
-                "P0/P1 findings",
-            ]
-        ):
             continue
 
-        sev_match = finding_sev_pattern.search(line)
-        if not sev_match:
-            continue
+        # Check for block start
+        sev_match = _BLOCK_START.search(line)
+        if sev_match and not _should_skip_line(line):
+            # Flush previous block
+            if current_block is not None:
+                blocks.append((current_severity, current_block_section, current_block))
+            severity = (
+                sev_match.group(1) or sev_match.group(2)
+                or sev_match.group(3) or sev_match.group(4)
+            )
+            current_severity = severity
+            current_block_section = current_section
+            current_block = [line]
+        elif current_block is not None:
+            # Continuation line — append to current block
+            # End block on blank line followed by non-indented content
+            if not line.strip():
+                current_block.append(line)
+            else:
+                current_block.append(line)
 
-        # Extract severity from whichever group matched
-        severity = (
-            sev_match.group(1)
-            or sev_match.group(2)
-            or sev_match.group(3)
-            or sev_match.group(4)
-        )
+    # Flush final block
+    if current_block is not None:
+        blocks.append((current_severity, current_block_section, current_block))
 
-        # Extract a summary — text after the severity marker
-        text_after_sev = line[sev_match.end() :].strip().lstrip(":—- ").strip()
-        # Remove markdown bold markers
-        summary = re.sub(r"\*\*", "", text_after_sev).strip()
+    # Pass 2: extract findings from blocks
+    findings: list[dict] = []
+    counters: dict[str, int] = {}
+
+    for severity, section, lines in blocks:
+        # Extract summary: prefer **Impact:** line, fall back to first line text
+        summary = ""
+        for bline in lines:
+            impact_match = _IMPACT_PATTERN.search(bline)
+            if impact_match:
+                summary = re.sub(r"\*\*", "", impact_match.group(1)).strip()
+                break
+        if not summary:
+            # Fall back to text after severity on the first line
+            first_line = lines[0] if lines else ""
+            sev_match = _BLOCK_START.search(first_line)
+            if sev_match:
+                text_after = first_line[sev_match.end():].strip().lstrip(":—- ").strip()
+                summary = re.sub(r"\*\*", "", text_after).strip()
+
         if not summary or len(summary) < 5:
             continue
 
-        # Truncate to first sentence or reasonable length
         if len(summary) > 120:
             summary = summary[:117] + "..."
 
-        # Extract location
-        loc_match = location_pattern.search(line)
-        location = loc_match.group(1) if loc_match else ""
+        # Extract location from all block lines
+        location = ""
+        for bline in lines:
+            loc_match = _LOCATION_PATTERN.search(bline)
+            if loc_match:
+                location = loc_match.group(1)
+                break
 
-        # Generate ID
         counters[severity] = counters.get(severity, 0) + 1
         finding_id = f"R{review_round}-{severity}-{counters[severity]}"
 
-        findings.append(
-            {
-                "id": finding_id,
-                "severity": severity,
-                "section": current_section,
-                "summary": summary,
-                "location": location,
-                "status": "open",
-            }
-        )
+        findings.append({
+            "id": finding_id,
+            "severity": severity,
+            "section": section,
+            "summary": summary,
+            "location": location,
+            "status": "open",
+        })
 
-    return findings
+    # Fail-safe: check if severity markers exist but we parsed nothing
+    parse_uncertain = False
+    if not findings:
+        marker_count = len(re.findall(r"\*\*(P[0-3])\*\*", review_text))
+        if marker_count > 0:
+            parse_uncertain = True
+
+    return (findings, parse_uncertain)
 
 
-def _finding_key(f: dict) -> "tuple[str, str]":
-    """Compute a stable matching key for a finding.
+def _finding_keys(f: dict) -> "tuple[tuple[str, str, str], tuple[str, str]]":
+    """Return (primary_key, fallback_key) for finding matching.
 
-    Uses (severity, summary_fingerprint) where the fingerprint is the first
-    50 chars of the summary, lowercased and stripped. File path and section
-    are intentionally excluded from the primary key because:
-    - Line numbers shift across revisions
-    - The model may extract different locations or omit them entirely
-    - Section headings may vary between review rounds
-
-    This yields more false positives (matching unrelated findings with
-    similar descriptions) but avoids the worse problem of false negatives
-    (marking unresolved findings as addressed).
+    Primary: (severity, file_basename, summary[:50]) — used when file path is
+    available in both the previous and current finding.
+    Fallback: (severity, summary[:50]) — used when file path is missing or for
+    unique-candidate matching. This prevents false negatives when the model
+    omits a location in one round.
     """
     summary = f.get("summary", "").lower().strip()[:50]
-    return (f.get("severity", ""), summary)
+    severity = f.get("severity", "")
+    location = f.get("location", "")
+    file_basename = os.path.basename(location.split(":")[0]) if location else ""
+    primary = (severity, file_basename, summary)
+    fallback = (severity, summary)
+    return (primary, fallback)
 
 
 def merge_findings(
     previous: "list[dict]", current: "list[dict]"
 ) -> "list[dict]":
-    """Merge findings across review rounds.
+    """Merge findings across review rounds using tiered matching.
 
-    Match by (severity, summary_fingerprint). Previous findings absent from
-    current are marked 'addressed'. Supports multiple findings per key
-    without overwriting.
+    Pass 1: Match by primary key (severity + file_basename + summary[:50]).
+    Pass 2: For remaining unmatched findings, try fallback key (severity +
+    summary[:50]) but ONLY when there's exactly one candidate (unique match).
+    After both passes: mark unconsumed previous findings as addressed.
     """
-    # Build lookup from previous findings — list per key to handle duplicates
-    prev_by_key: dict[tuple, list[dict]] = {}
+    # Build lookups — list per key to handle duplicates
+    prev_by_primary: dict[tuple, list[dict]] = {}
+    prev_by_fallback: dict[tuple, list[dict]] = {}
     for f in previous:
-        key = _finding_key(f)
-        prev_by_key.setdefault(key, []).append(f)
+        primary, fallback = _finding_keys(f)
+        prev_by_primary.setdefault(primary, []).append(f)
+        prev_by_fallback.setdefault(fallback, []).append(f)
 
+    # Track consumed previous findings by id
+    consumed_ids: set[str] = set()
     merged: list[dict] = []
 
+    # Pass 1: primary key matching
     for f in current:
-        key = _finding_key(f)
-        if key in prev_by_key and prev_by_key[key]:
-            # Consume one match from the previous list
-            prev_by_key[key].pop(0)
-            # Keep the current finding (updated summary) with status open
-            merged.append(f)
-        else:
-            merged.append(f)
+        primary, _ = _finding_keys(f)
+        if primary[1] and primary in prev_by_primary:
+            # Current finding has a file path — try exact match
+            candidates = [
+                p for p in prev_by_primary[primary]
+                if p.get("id", "") not in consumed_ids
+            ]
+            if candidates:
+                consumed_ids.add(candidates[0].get("id", ""))
+                merged.append(f)
+                continue
+        merged.append(f)
+
+    # Pass 2: fallback matching — ONLY for current findings without a file path
+    # that weren't matched in pass 1. Findings with file paths that didn't
+    # match are genuinely different (different file = different finding).
+    merged_pass2: list[dict] = []
+    for f in merged:
+        primary, fallback = _finding_keys(f)
+        has_file = bool(primary[1])
+
+        # Skip fallback if this finding has a file path — it either matched
+        # in pass 1 or it's a genuinely new finding in a different file
+        if has_file:
+            merged_pass2.append(f)
+            continue
+
+        # No file path — try fallback with exactly one unconsumed candidate
+        unconsumed = [
+            p for p in prev_by_fallback.get(fallback, [])
+            if p.get("id", "") not in consumed_ids
+        ]
+        if len(unconsumed) == 1:
+            consumed_ids.add(unconsumed[0].get("id", ""))
+        merged_pass2.append(f)
 
     # Mark unconsumed previous findings as addressed
-    for remaining in prev_by_key.values():
-        for f in remaining:
+    for f in previous:
+        if f.get("id", "") not in consumed_ids:
             addressed = dict(f)
             addressed["status"] = "addressed"
-            merged.append(addressed)
+            merged_pass2.append(addressed)
 
-    return merged
+    return merged_pass2
 
 
 # ---------------------------------------------------------------------------
@@ -662,12 +728,12 @@ def estimate_cost(
     Returns a formatted string like "$0.09 input + $0.13 max output = $0.22 max",
     or None if model pricing is unknown.
     """
-    # Try exact match first, then prefix match
+    # Try exact match first, then longest prefix match
     pricing = PRICING.get(model)
     if not pricing:
-        for name, p in PRICING.items():
+        for name in sorted(PRICING.keys(), key=len, reverse=True):
             if model.startswith(name):
-                pricing = p
+                pricing = PRICING[name]
                 break
     if not pricing:
         return None
@@ -1159,13 +1225,40 @@ def main() -> None:
                 file=sys.stderr,
             )
 
+    # --- Read delta diff (before context expansion so we can scope context) ---
+    delta_diff_text = None
+    delta_changed_files_text = None
+    if args.delta_diff:
+        try:
+            with open(args.delta_diff) as f:
+                delta_diff_text = f.read()
+            if not delta_diff_text.strip():
+                delta_diff_text = None
+        except FileNotFoundError:
+            print(
+                f"Warning: Delta diff not found: {args.delta_diff}.",
+                file=sys.stderr,
+            )
+    if args.delta_changed_files:
+        try:
+            with open(args.delta_changed_files) as f:
+                delta_changed_files_text = f.read()
+        except FileNotFoundError:
+            pass
+
     # --- Context expansion ---
     source_files_text = None
     import_context_text = None
 
     if args.context in ("standard", "deep") and args.repo_root:
+        # In delta mode, scope source/import context to delta files only
+        context_files_text = (
+            delta_changed_files_text
+            if delta_changed_files_text
+            else changed_files_text
+        )
         changed_paths = resolve_changed_source_files(
-            changed_files_text, args.repo_root
+            context_files_text, args.repo_root
         )
         if changed_paths:
             source_files_text = read_source_files(changed_paths, args.repo_root)
@@ -1215,27 +1308,6 @@ def main() -> None:
         )
         if not structured_findings:
             structured_findings = None  # Normalize empty to None
-
-    # --- Read delta diff ---
-    delta_diff_text = None
-    delta_changed_files_text = None
-    if args.delta_diff:
-        try:
-            with open(args.delta_diff) as f:
-                delta_diff_text = f.read()
-            if not delta_diff_text.strip():
-                delta_diff_text = None
-        except FileNotFoundError:
-            print(
-                f"Warning: Delta diff not found: {args.delta_diff}.",
-                file=sys.stderr,
-            )
-    if args.delta_changed_files:
-        try:
-            with open(args.delta_changed_files) as f:
-                delta_changed_files_text = f.read()
-        except FileNotFoundError:
-            pass
 
     # --- Token budget ---
     # Estimate mandatory content size (always included, not budget-governed)
@@ -1327,8 +1399,17 @@ def main() -> None:
     # Write review state if requested
     if args.review_state and args.commit_sha:
         current_round = previous_round + 1
-        current_findings = parse_review_findings(review_content, current_round)
-        if structured_findings:
+        current_findings, parse_uncertain = parse_review_findings(
+            review_content, current_round
+        )
+        if parse_uncertain and structured_findings:
+            print(
+                "Warning: Could not parse findings from review output. "
+                "Preserving prior findings.",
+                file=sys.stderr,
+            )
+            final_findings = structured_findings
+        elif structured_findings:
             final_findings = merge_findings(structured_findings, current_findings)
         else:
             final_findings = current_findings

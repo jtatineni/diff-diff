@@ -156,15 +156,71 @@ Options:
 
 If user selects abort, clean up temp files and stop. If continue, proceed.
 
+### Step 3c: Full-File Secret Scan (for standard/deep context)
+
+When `--context` is not `minimal`, full source files will be uploaded to OpenAI. The diff-based scan in Step 3b only covers changed lines, so scan the full content of every file that will be transmitted:
+
+```bash
+# Category 1: Changed diff_diff/ source files (standard/deep)
+upload_scan_files=""
+if [ "$context_level" != "minimal" ]; then
+    upload_scan_files=$(git diff --name-only "${comparison_ref}...HEAD" | grep "^diff_diff/.*\.py$" || true)
+fi
+
+# Category 2: All diff_diff/*.py for deep mode (conservative superset of import expansion)
+if [ "$context_level" = "deep" ]; then
+    upload_scan_files=$(find diff_diff -name "*.py" -not -path "*/__pycache__/*" 2>/dev/null | sort -u)
+fi
+
+# Category 3: --include-files (resolve paths same as script does)
+if [ -n "$include_files" ]; then
+    for f in $(echo "$include_files" | tr ',' ' '); do
+        if [ -f "diff_diff/$f" ]; then upload_scan_files="$upload_scan_files diff_diff/$f"
+        elif [ -f "$f" ]; then upload_scan_files="$upload_scan_files $f"
+        fi
+    done
+fi
+
+# Scan using same canonical content patterns from Step 3b (never echo secret values)
+if [ -n "$upload_scan_files" ]; then
+    secret_hits=$(grep -rlE "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" $upload_scan_files 2>/dev/null || true)
+    sensitive_hits=$(echo "$upload_scan_files" | tr ' ' '\n' | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true)
+fi
+```
+
+If either `secret_hits` or `sensitive_hits` is non-empty, use AskUserQuestion:
+```
+Warning: Potential secrets detected in source files that would be uploaded to OpenAI
+(full-file scan, not just diff hunks):
+- <list filenames>
+
+Options:
+1. Abort — review and remove secrets before retrying
+2. Continue — I confirm these are not real secrets
+```
+
+If user selects abort, clean up temp files and stop. If continue, proceed.
+
 ### Step 4: Handle Re-Review State
 
-Check for existing review state and generate delta diff if applicable:
+Check for existing review state and generate delta diff if applicable. **Validate that the
+stored state matches the current branch and base** before reusing — stale state from a
+different branch can contaminate re-review context.
 
 ```bash
 # Check for review-state.json
 if [ -f .claude/reviews/review-state.json ]; then
-    # Read last_reviewed_commit from the JSON file
+    # Read state fields
     last_reviewed_commit=$(python3 -c "import json; print(json.load(open('.claude/reviews/review-state.json')).get('last_reviewed_commit', ''))")
+    stored_branch=$(python3 -c "import json; print(json.load(open('.claude/reviews/review-state.json')).get('branch', ''))")
+    stored_base=$(python3 -c "import json; print(json.load(open('.claude/reviews/review-state.json')).get('base_ref', ''))")
+
+    # Validate branch/base match
+    if [ "$stored_branch" != "$branch_name" ] || [ "$stored_base" != "$comparison_ref" ]; then
+        echo "Warning: review-state.json is from branch '$stored_branch' (base: '$stored_base'), but current is '$branch_name' (base: '$comparison_ref'). Discarding stale state."
+        rm -f .claude/reviews/review-state.json
+        last_reviewed_commit=""
+    fi
 
     if [ -n "$last_reviewed_commit" ] && git cat-file -t "$last_reviewed_commit" >/dev/null 2>&1; then
         # SHA is reachable
