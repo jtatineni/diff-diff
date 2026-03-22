@@ -42,7 +42,7 @@ class HausmanPretestResult:
     recommendation: str
     """``"pt_all"`` if fail to reject, ``"pt_post"`` if reject."""
     gt_details: Optional[pd.DataFrame] = None
-    """Per-(g,t) details: ATT_all, ATT_post, delta, SE_all, SE_post."""
+    """Per-event-study-horizon details: relative_period, es_all, es_post, delta."""
 
     def __repr__(self) -> str:
         return (

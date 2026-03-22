@@ -348,6 +348,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         """
         self._validate_params()
 
+        if self.cluster is not None and survey_design is not None:
+            raise NotImplementedError(
+                "cluster and survey_design cannot both be set. "
+                "Use survey_design with PSU/strata for cluster-robust inference."
+            )
+
         # Resolve survey design if provided
         from diff_diff.survey import _resolve_survey_for_fit
 
@@ -1475,66 +1481,84 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         if not common_gts:
             return _nan_result()
 
-        # Filter out (g,t) cells with non-finite effect estimates
-        common_gts = [
-            gt
-            for gt in common_gts
-            if np.isfinite(result_all.group_time_effects[gt]["effect"])
-            and np.isfinite(result_post.group_time_effects[gt]["effect"])
-        ]
-        if not common_gts:
-            return _nan_result()
-
-        k = len(common_gts)
-
-        # Build EIF matrices for common (g,t) pairs: (n_units, k)
         eif_all = result_all.influence_functions
         eif_post = result_post.influence_functions
         assert eif_all is not None and eif_post is not None
         n_units = len(next(iter(eif_all.values())))
 
-        eif_all_mat = np.column_stack([eif_all[gt] for gt in common_gts])
-        eif_post_mat = np.column_stack([eif_post[gt] for gt in common_gts])
-
-        # Filter out (g,t) pairs with non-finite EIF values
-        finite_mask = np.all(np.isfinite(eif_all_mat), axis=0) & np.all(
-            np.isfinite(eif_post_mat), axis=0
+        # --- Aggregate to post-treatment ES(e) per Theorem A.1 ---
+        # Derive cohort fractions from data for proper weights
+        all_units_list = sorted(data[unit].unique())
+        unit_cohorts = (
+            data.groupby(unit)[first_treat].first().reindex(all_units_list).values.astype(float)
         )
-        if not np.all(finite_mask):
-            n_dropped = int(np.sum(~finite_mask))
-            common_gts = [gt for gt, m in zip(common_gts, finite_mask) if m]
-            eif_all_mat = eif_all_mat[:, finite_mask]
-            eif_post_mat = eif_post_mat[:, finite_mask]
-            k = len(common_gts)
-            if k == 0:
-                return _nan_result()
-            warnings.warn(
-                f"Dropped {n_dropped} (g,t) pair(s) with non-finite EIF values "
-                "from Hausman test.",
-                UserWarning,
-                stacklevel=2,
-            )
+        cohort_fractions: Dict[float, float] = {}
+        for g in set(result_all.groups) | set(result_post.groups):
+            cohort_fractions[g] = float(np.sum(unit_cohorts == g)) / n_units
 
-        # Recompute delta after filtering
-        delta = np.array(
-            [
-                result_post.group_time_effects[gt]["effect"]
-                - result_all.group_time_effects[gt]["effect"]
-                for gt in common_gts
-            ]
+        def _aggregate_es(
+            gt_effects: Dict, eif_dict: Dict, groups: List, ant: int
+        ) -> Dict[int, Tuple[float, np.ndarray]]:
+            """Aggregate (g,t) effects to post-treatment ES(e) with cohort weights."""
+            by_e: Dict[int, List[Tuple[float, float, np.ndarray]]] = {}
+            for (g, t), d in gt_effects.items():
+                e = int(t - g)
+                if e < -ant:  # pre-treatment beyond anticipation window
+                    continue
+                if not np.isfinite(d["effect"]):
+                    continue
+                if (g, t) not in eif_dict:
+                    continue
+                eif_vec = eif_dict[(g, t)]
+                if not np.all(np.isfinite(eif_vec)):
+                    continue
+                pg = cohort_fractions.get(g, 0.0)
+                if e not in by_e:
+                    by_e[e] = []
+                by_e[e].append((d["effect"], pg, eif_vec))
+
+            result: Dict[int, Tuple[float, np.ndarray]] = {}
+            for e, items in by_e.items():
+                if e < 0:  # restrict to post-treatment (e >= 0)
+                    continue
+                effs = np.array([x[0] for x in items])
+                pgs = np.array([x[1] for x in items])
+                eifs = [x[2] for x in items]
+                total_pg = pgs.sum()
+                w = pgs / total_pg if total_pg > 0 else np.ones(len(pgs)) / len(pgs)
+                es_eff = float(np.sum(w * effs))
+                es_eif = np.zeros(n_units)
+                for k_idx in range(len(eifs)):
+                    es_eif += w[k_idx] * eifs[k_idx]
+                result[e] = (es_eff, es_eif)
+            return result
+
+        es_all = _aggregate_es(
+            result_all.group_time_effects, eif_all, result_all.groups, anticipation
+        )
+        es_post = _aggregate_es(
+            result_post.group_time_effects, eif_post, result_post.groups, anticipation
         )
 
-        # Also filter units with non-finite EIF values (row-wise)
+        # Find common post-treatment horizons
+        common_e = sorted(set(es_all.keys()) & set(es_post.keys()))
+        if not common_e:
+            return _nan_result()
+
+        delta = np.array([es_post[e][0] - es_all[e][0] for e in common_e])
+
+        # Build ES(e)-level EIF matrices
+        eif_all_mat = np.column_stack([es_all[e][1] for e in common_e])
+        eif_post_mat = np.column_stack([es_post[e][1] for e in common_e])
+
+        # Filter units with non-finite EIF values
         row_finite = np.all(np.isfinite(eif_all_mat), axis=1) & np.all(
             np.isfinite(eif_post_mat), axis=1
         )
-        # Build cluster mapping for covariance if needed
         cl_idx: Optional[np.ndarray] = None
         n_cl: Optional[int] = None
         if cluster is not None:
-            all_units = sorted(data[unit].unique())
-            cl_idx, n_cl = _validate_and_build_cluster_mapping(data, unit, cluster, all_units)
-
+            cl_idx, n_cl = _validate_and_build_cluster_mapping(data, unit, cluster, all_units_list)
         if not np.all(row_finite):
             eif_all_mat = eif_all_mat[row_finite]
             eif_post_mat = eif_post_mat[row_finite]
@@ -1542,7 +1566,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             if cl_idx is not None:
                 cl_idx = cl_idx[row_finite]
 
-        # Compute full covariance matrices using shared _cluster_aggregate
+        # Compute full covariance matrices
         if cl_idx is not None and n_cl is not None:
 
             def _eif_cov(eif_mat: np.ndarray) -> np.ndarray:
@@ -1559,7 +1583,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
         V = cov_post - cov_all
 
-        # If covariance has NaN/Inf, test is unreliable
         if not np.all(np.isfinite(V)):
             warnings.warn(
                 "Hausman covariance matrix contains non-finite values. " "The test is unreliable.",
@@ -1583,29 +1606,23 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 stacklevel=2,
             )
 
-        # Effective rank = number of positive eigenvalues
         effective_rank = int(np.sum(eigvals > tol))
         if effective_rank == 0:
             return _nan_result()
 
-        # Compute H = delta' @ pinv(V) @ delta
         V_pinv = np.linalg.pinv(V, rcond=tol / max_eigval if max_eigval > 0 else 1e-10)
         H = float(delta @ V_pinv @ delta)
-        H = max(H, 0.0)  # numerical floor
+        H = max(H, 0.0)
 
         p_value = float(chi2.sf(H, df=effective_rank))
         reject = p_value < alpha
 
-        # Build per-(g,t) details DataFrame
-        gt_details = pd.DataFrame(
+        es_details = pd.DataFrame(
             {
-                "group": [gt[0] for gt in common_gts],
-                "time": [gt[1] for gt in common_gts],
-                "att_all": [result_all.group_time_effects[gt]["effect"] for gt in common_gts],
-                "att_post": [result_post.group_time_effects[gt]["effect"] for gt in common_gts],
+                "relative_period": common_e,
+                "es_all": [es_all[e][0] for e in common_e],
+                "es_post": [es_post[e][0] for e in common_e],
                 "delta": delta,
-                "se_all": [result_all.group_time_effects[gt]["se"] for gt in common_gts],
-                "se_post": [result_post.group_time_effects[gt]["se"] for gt in common_gts],
             }
         )
 
@@ -1618,5 +1635,5 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             att_all=result_all.overall_att,
             att_post=result_post.overall_att,
             recommendation="pt_post" if reject else "pt_all",
-            gt_details=gt_details,
+            gt_details=es_details,
         )

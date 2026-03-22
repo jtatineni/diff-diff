@@ -638,13 +638,15 @@ class TestHausmanPretest:
             assert pretest.statistic >= 0
         assert pretest.recommendation in ("pt_all", "pt_post", "inconclusive")
 
-    def test_hausman_gt_details(self):
-        """gt_details should have expected columns."""
+    def test_hausman_es_details(self):
+        """gt_details should have event-study columns per Theorem A.1."""
         df = _make_staggered_panel(n_per_group=80, n_control=100)
         pretest = EfficientDiD.hausman_pretest(df, "y", "unit", "time", "first_treat")
         assert pretest.gt_details is not None
-        expected_cols = {"group", "time", "att_all", "att_post", "delta", "se_all", "se_post"}
+        expected_cols = {"relative_period", "es_all", "es_post", "delta"}
         assert set(pretest.gt_details.columns) == expected_cols
+        # All relative periods should be post-treatment (>= 0)
+        assert all(e >= 0 for e in pretest.gt_details["relative_period"])
 
     def test_hausman_recommendation_field(self):
         """recommendation should be pt_all or pt_post."""
@@ -892,6 +894,30 @@ class TestClusterRobustSE:
         df["cluster_id"] = 0  # all same cluster
         with pytest.raises(ValueError, match="at least 2 clusters"):
             EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
+
+    def test_cluster_plus_survey_raises(self):
+        """cluster + survey_design should raise NotImplementedError."""
+        df = _make_staggered_panel(n_per_group=60, n_control=80)
+        df["cluster_id"] = df["unit"] % 5
+        df["w"] = 1.0
+        with pytest.raises(NotImplementedError, match="cluster and survey_design"):
+            EfficientDiD(cluster="cluster_id").fit(
+                df, "y", "unit", "time", "first_treat", survey_design="w"
+            )
+
+    def test_clustered_bootstrap_aggregate_all(self, ci_params):
+        """Clustered bootstrap with aggregate='all' should produce finite results."""
+        n_boot = ci_params.bootstrap(99)
+        df = self._make_clustered_panel(n_clusters=60, units_per_cluster=3)
+        result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
+            df, "y", "unit", "time", "first_treat", aggregate="all"
+        )
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+        for e, d in result.event_study_effects.items():
+            assert np.isfinite(d["se"])
+        for g, d in result.group_effects.items():
+            assert np.isfinite(d["se"])
 
 
 class TestSmallCohortWarning:
