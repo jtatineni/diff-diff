@@ -24,6 +24,7 @@ from diff_diff._backend import (
     _rust_bootstrap_trop_variance_global,
     _rust_loocv_grid_search_global,
 )
+from diff_diff.trop_local import _soft_threshold_svd
 from diff_diff.trop_results import TROPResults
 from diff_diff.utils import safe_inference
 
@@ -39,8 +40,6 @@ class TROPGlobalMixin:
     - Inference params: ``alpha``, ``n_bootstrap``, ``seed``
     - State: ``results_``, ``is_fitted_``
 
-    The ``_solve_global_with_lowrank`` method calls ``self._soft_threshold_svd``
-    which is defined in ``TROPLocalMixin`` and resolved via Python MRO.
     """
 
     # Type hints for attributes accessed from the main TROP class
@@ -395,9 +394,6 @@ class TROPGlobalMixin:
         The (1-W) masking is already applied to delta by _compute_global_weights,
         so treated observations have zero weight and do not affect the fit.
 
-        Note: calls ``self._soft_threshold_svd`` which is defined in
-        ``TROPLocalMixin`` and resolved via Python MRO on the ``TROP`` class.
-
         Parameters
         ----------
         Y : np.ndarray
@@ -468,7 +464,7 @@ class TROPGlobalMixin:
 
                 # Proximal step: soft-threshold singular values
                 L_inner_prev = L_inner
-                L_inner = self._soft_threshold_svd(gradient_step, threshold)
+                L_inner = _soft_threshold_svd(gradient_step, threshold)
                 t_fista = t_fista_new
 
                 # Convergence check (L_inner_prev holds the pre-SVD value)
@@ -564,7 +560,9 @@ class TROPGlobalMixin:
         if violating_units:
             raise ValueError(
                 f"Treatment indicator is not an absorbing state for units: {violating_units}. "
-                f"D[t, unit] must be monotonic non-decreasing."
+                f"D[t, unit] must be monotonic non-decreasing (once treated, always treated). "
+                f"If this is event-study style data, convert to absorbing state: "
+                f"D[t, i] = 1 for all t >= first treatment period."
             )
 
         # Identify treated observations

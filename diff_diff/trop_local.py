@@ -27,6 +27,76 @@ from diff_diff._backend import (
 from diff_diff.trop_results import _PrecomputedStructures
 
 
+# Module-level convergence tolerance for SVD singular value truncation.
+# Singular values below this threshold after soft-thresholding are treated
+# as zero to improve numerical stability.
+_CONVERGENCE_TOL_SVD: float = 1e-10
+
+
+def _soft_threshold_svd(
+    M: np.ndarray,
+    threshold: float,
+    convergence_tol: float = _CONVERGENCE_TOL_SVD,
+) -> np.ndarray:
+    """
+    Apply soft-thresholding to singular values (proximal operator for nuclear norm).
+
+    Parameters
+    ----------
+    M : np.ndarray
+        Input matrix.
+    threshold : float
+        Soft-thresholding parameter.
+    convergence_tol : float, default=1e-10
+        Singular values below this after thresholding are treated as zero.
+
+    Returns
+    -------
+    np.ndarray
+        Matrix with soft-thresholded singular values.
+    """
+    if threshold <= 0:
+        return M
+
+    # Handle NaN/Inf values in input
+    if not np.isfinite(M).all():
+        M = np.nan_to_num(M, nan=0.0, posinf=0.0, neginf=0.0)
+
+    try:
+        U, s, Vt = np.linalg.svd(M, full_matrices=False)
+    except np.linalg.LinAlgError:
+        # SVD failed, return zero matrix
+        return np.zeros_like(M)
+
+    # Check for numerical issues in SVD output
+    if not (np.isfinite(U).all() and np.isfinite(s).all() and np.isfinite(Vt).all()):
+        # SVD produced non-finite values, return zero matrix
+        return np.zeros_like(M)
+
+    s_thresh = np.maximum(s - threshold, 0)
+
+    # Use truncated reconstruction with only non-zero singular values
+    nonzero_mask = s_thresh > convergence_tol
+    if not np.any(nonzero_mask):
+        return np.zeros_like(M)
+
+    # Truncate to non-zero components for numerical stability
+    U_trunc = U[:, nonzero_mask]
+    s_trunc = s_thresh[nonzero_mask]
+    Vt_trunc = Vt[nonzero_mask, :]
+
+    # Compute result, suppressing expected numerical warnings from
+    # ill-conditioned matrices during alternating minimization
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        result = (U_trunc * s_trunc) @ Vt_trunc
+
+    # Replace any NaN/Inf in result with zeros
+    if not np.isfinite(result).all():
+        result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+
+    return result
+
+
 class TROPLocalMixin:
     """Mixin providing local (observation-specific) estimation for TROP.
 
@@ -378,61 +448,8 @@ class TROPLocalMixin:
         M: np.ndarray,
         threshold: float,
     ) -> np.ndarray:
-        """
-        Apply soft-thresholding to singular values (proximal operator for nuclear norm).
-
-        Parameters
-        ----------
-        M : np.ndarray
-            Input matrix.
-        threshold : float
-            Soft-thresholding parameter.
-
-        Returns
-        -------
-        np.ndarray
-            Matrix with soft-thresholded singular values.
-        """
-        if threshold <= 0:
-            return M
-
-        # Handle NaN/Inf values in input
-        if not np.isfinite(M).all():
-            M = np.nan_to_num(M, nan=0.0, posinf=0.0, neginf=0.0)
-
-        try:
-            U, s, Vt = np.linalg.svd(M, full_matrices=False)
-        except np.linalg.LinAlgError:
-            # SVD failed, return zero matrix
-            return np.zeros_like(M)
-
-        # Check for numerical issues in SVD output
-        if not (np.isfinite(U).all() and np.isfinite(s).all() and np.isfinite(Vt).all()):
-            # SVD produced non-finite values, return zero matrix
-            return np.zeros_like(M)
-
-        s_thresh = np.maximum(s - threshold, 0)
-
-        # Use truncated reconstruction with only non-zero singular values
-        nonzero_mask = s_thresh > self.CONVERGENCE_TOL_SVD
-        if not np.any(nonzero_mask):
-            return np.zeros_like(M)
-
-        # Truncate to non-zero components for numerical stability
-        U_trunc = U[:, nonzero_mask]
-        s_trunc = s_thresh[nonzero_mask]
-        Vt_trunc = Vt[nonzero_mask, :]
-
-        # Compute result, suppressing expected numerical warnings from
-        # ill-conditioned matrices during alternating minimization
-        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            result = (U_trunc * s_trunc) @ Vt_trunc
-
-        # Replace any NaN/Inf in result with zeros
-        if not np.isfinite(result).all():
-            result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
-
-        return result
+        """Delegate to module-level ``_soft_threshold_svd``."""
+        return _soft_threshold_svd(M, threshold, self.CONVERGENCE_TOL_SVD)
 
     def _weighted_nuclear_norm_solve(
         self,
@@ -947,9 +964,6 @@ class TROPLocalMixin:
 
         n_units = len(all_units)
         n_periods = len(all_periods)
-
-        unit_to_idx = {u: i for i, u in enumerate(all_units)}
-        period_to_idx = {p: i for i, p in enumerate(all_periods)}
 
         # Vectorized: use pivot for O(1) reshaping instead of O(n) iterrows loop
         Y = (
