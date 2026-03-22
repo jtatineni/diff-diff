@@ -478,8 +478,11 @@ class BaconDecomposition:
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
 
-        # Validate within-unit constancy for panel survey designs
-        if resolved_survey is not None:
+        # Validate within-unit constancy for exact survey weights only.
+        # The exact-weight path collapses to per-unit weights via groupby().first(),
+        # which requires constant survey columns within units. The approximate path
+        # uses observation-level weighted means and does not need this constraint.
+        if resolved_survey is not None and self.weights == "exact":
             from diff_diff.survey import _validate_unit_constant_survey
 
             _validate_unit_constant_survey(data, unit, survey_design)

@@ -1021,7 +1021,7 @@ The paper text states a stricter bound (T_min + 1) but the R code by the co-auth
 - [x] Anticipation parameter support
 - [x] Never-treated encoding (0 and inf)
 - [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments
-- **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD
+- **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; `weight_type="fweight"` is rejected because Q-weight composition produces non-integer composed weights that break frequency-weight semantics
 
 ---
 
@@ -1576,7 +1576,7 @@ Weights depend on group sizes and variance in treatment timing.
 - [ ] TWFE coefficient ≈ weighted sum of 2×2 estimates
 - [ ] Visualization shows weight vs. estimate by comparison type
 - [x] Survey design support (Phase 3): weighted cell means, weighted within-transform, weighted group shares
-- **Note:** Bacon decomposition with survey weights is diagnostic; exact-sum guarantee is approximate
+- **Note:** Bacon decomposition with survey weights is diagnostic; exact-sum guarantee is approximate; `weights="exact"` requires within-unit-constant survey columns (approximate path accepts time-varying weights)
 
 ---
 
