@@ -332,6 +332,87 @@ class TestImputationDiDSurvey:
         assert "Survey Design" in summary
         assert "pweight" in summary
 
+    def test_se_scale_invariance_fe_only(self, staggered_survey_data):
+        """SE must be invariant to weight rescaling (FE-only, no covariates)."""
+        data = staggered_survey_data.copy()
+        data["weight2"] = data["weight"] * 3.1
+        sd1 = SurveyDesign(weights="weight")
+        sd2 = SurveyDesign(weights="weight2")
+        r1 = ImputationDiD().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd1,
+        )
+        r2 = ImputationDiD().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd2,
+        )
+        assert np.isclose(r1.overall_att, r2.overall_att, atol=1e-8)
+        assert np.isclose(
+            r1.overall_se, r2.overall_se, atol=1e-8
+        ), f"SE not scale-invariant (FE-only): {r1.overall_se} vs {r2.overall_se}"
+
+    def test_se_scale_invariance_with_covariates(self, staggered_survey_data):
+        """SE must be invariant to weight rescaling (with covariates)."""
+        data = staggered_survey_data.copy()
+        data["x1"] = np.random.default_rng(99).normal(0, 1, len(data))
+        data["weight2"] = data["weight"] * 3.1
+        sd1 = SurveyDesign(weights="weight")
+        sd2 = SurveyDesign(weights="weight2")
+        r1 = ImputationDiD().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+            survey_design=sd1,
+        )
+        r2 = ImputationDiD().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+            survey_design=sd2,
+        )
+        assert np.isclose(r1.overall_att, r2.overall_att, atol=1e-8)
+        assert np.isclose(
+            r1.overall_se, r2.overall_se, atol=1e-8
+        ), f"SE not scale-invariant (covariates): {r1.overall_se} vs {r2.overall_se}"
+
+    def test_wrapper_imputation_did_with_survey(self, staggered_survey_data):
+        """imputation_did() wrapper forwards survey_design correctly."""
+        from diff_diff import imputation_did
+
+        sd = SurveyDesign(weights="weight")
+        r_wrapper = imputation_did(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        r_direct = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert np.isclose(r_wrapper.overall_att, r_direct.overall_att, atol=1e-10)
+        assert r_wrapper.survey_metadata is not None
+
 
 # =============================================================================
 # TestTwoStageDiDSurvey
@@ -459,6 +540,30 @@ class TestTwoStageDiDSurvey:
         summary = result.summary()
         assert "Survey Design" in summary
         assert "pweight" in summary
+
+    def test_wrapper_two_stage_did_with_survey(self, staggered_survey_data):
+        """two_stage_did() wrapper forwards survey_design correctly."""
+        from diff_diff import two_stage_did
+
+        sd = SurveyDesign(weights="weight")
+        r_wrapper = two_stage_did(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        r_direct = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert np.isclose(r_wrapper.overall_att, r_direct.overall_att, atol=1e-10)
+        assert r_wrapper.survey_metadata is not None
 
     def test_always_treated_with_survey(self, staggered_survey_data):
         """TwoStageDiD with survey + always-treated units should not crash."""
