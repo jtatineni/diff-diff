@@ -1329,26 +1329,16 @@ class TripleDifference:
                 score_ps = score_ps * weights[:, None]
             asy_lin_rep_ps = score_ps @ hessian
 
-            if weights is not None:
-                M2_pre = np.average(
-                    (riesz_control_pre * (y - att_control_pre))[:, None] * covX,
-                    axis=0,
-                    weights=weights,
-                ) / np.mean(riesz_control_pre)
-                M2_post = np.average(
-                    (riesz_control_post * (y - att_control_post))[:, None] * covX,
-                    axis=0,
-                    weights=weights,
-                ) / np.mean(riesz_control_post)
-            else:
-                M2_pre = np.mean(
-                    (riesz_control_pre * (y - att_control_pre))[:, None] * covX,
-                    axis=0,
-                ) / np.mean(riesz_control_pre)
-                M2_post = np.mean(
-                    (riesz_control_post * (y - att_control_post))[:, None] * covX,
-                    axis=0,
-                ) / np.mean(riesz_control_post)
+            # Riesz representers already incorporate survey weights,
+            # so use np.mean (not np.average with weights) to avoid double-weighting.
+            M2_pre = np.mean(
+                (riesz_control_pre * (y - att_control_pre))[:, None] * covX,
+                axis=0,
+            ) / np.mean(riesz_control_pre)
+            M2_post = np.mean(
+                (riesz_control_post * (y - att_control_post))[:, None] * covX,
+                axis=0,
+            ) / np.mean(riesz_control_post)
             inf_control_ps = asy_lin_rep_ps @ (M2_post - M2_pre)
             inf_control = inf_control + inf_control_ps
 
@@ -1616,19 +1606,15 @@ class TripleDifference:
         )
 
         # OR correction for treated
-        def _wmean_ax0(arr):
-            """Weighted or unweighted column mean."""
-            if weights is not None:
-                return np.average(arr, axis=0, weights=weights)
-            return np.mean(arr, axis=0)
-
+        # Riesz representers already incorporate survey weights,
+        # so use np.mean (not weighted average) to avoid double-weighting.
         M1_post = (
-            (-_wmean_ax0((riesz_treat_post * post)[:, None] * covX) / m_riesz_treat_post)
+            (-np.mean((riesz_treat_post * post)[:, None] * covX, axis=0) / m_riesz_treat_post)
             if m_riesz_treat_post > 0
             else np.zeros(covX.shape[1])
         )
         M1_pre = (
-            (-_wmean_ax0((riesz_treat_pre * (1 - post))[:, None] * covX) / m_riesz_treat_pre)
+            (-np.mean((riesz_treat_pre * (1 - post))[:, None] * covX, axis=0) / m_riesz_treat_pre)
             if m_riesz_treat_pre > 0
             else np.zeros(covX.shape[1])
         )
@@ -1653,7 +1639,9 @@ class TripleDifference:
         # PS correction for control
         M2_pre = (
             (
-                _wmean_ax0((riesz_control_pre * (y - or_ctrl - att_control_pre))[:, None] * covX)
+                np.mean(
+                    (riesz_control_pre * (y - or_ctrl - att_control_pre))[:, None] * covX, axis=0
+                )
                 / m_riesz_control_pre
             )
             if m_riesz_control_pre > 0
@@ -1661,7 +1649,9 @@ class TripleDifference:
         )
         M2_post = (
             (
-                _wmean_ax0((riesz_control_post * (y - or_ctrl - att_control_post))[:, None] * covX)
+                np.mean(
+                    (riesz_control_post * (y - or_ctrl - att_control_post))[:, None] * covX, axis=0
+                )
                 / m_riesz_control_post
             )
             if m_riesz_control_post > 0
@@ -1671,12 +1661,15 @@ class TripleDifference:
 
         # OR correction for control
         M3_post = (
-            (-_wmean_ax0((riesz_control_post * post)[:, None] * covX) / m_riesz_control_post)
+            (-np.mean((riesz_control_post * post)[:, None] * covX, axis=0) / m_riesz_control_post)
             if m_riesz_control_post > 0
             else np.zeros(covX.shape[1])
         )
         M3_pre = (
-            (-_wmean_ax0((riesz_control_pre * (1 - post))[:, None] * covX) / m_riesz_control_pre)
+            (
+                -np.mean((riesz_control_pre * (1 - post))[:, None] * covX, axis=0)
+                / m_riesz_control_pre
+            )
             if m_riesz_control_pre > 0
             else np.zeros(covX.shape[1])
         )
@@ -1704,12 +1697,16 @@ class TripleDifference:
 
         # OR combination
         mom_post = (
-            _wmean_ax0((riesz_d[:, None] / m_riesz_d - riesz_dt1[:, None] / m_riesz_dt1) * covX)
+            np.mean(
+                (riesz_d[:, None] / m_riesz_d - riesz_dt1[:, None] / m_riesz_dt1) * covX, axis=0
+            )
             if (m_riesz_d > 0 and m_riesz_dt1 > 0)
             else np.zeros(covX.shape[1])
         )
         mom_pre = (
-            _wmean_ax0((riesz_d[:, None] / m_riesz_d - riesz_dt0[:, None] / m_riesz_dt0) * covX)
+            np.mean(
+                (riesz_d[:, None] / m_riesz_d - riesz_dt0[:, None] / m_riesz_dt0) * covX, axis=0
+            )
             if (m_riesz_d > 0 and m_riesz_dt0 > 0)
             else np.zeros(covX.shape[1])
         )

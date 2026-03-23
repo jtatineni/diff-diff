@@ -341,7 +341,8 @@ class CallawaySantAnnaAggregationMixin:
         ).astype(np.float64)
 
         if survey_w is not None:
-            # Survey-weighted WIF: indicator entries are sw_i / sum(sw_all)
+            # Survey-weighted WIF for group-share estimator p_g = sum(s_i * 1{G_i=g}) / sum(s_j).
+            # IF_i(p_g) = s_i * (1{G_i=g} - p_g) / sum(s_j)
             # Build per-unit weight vector aligned to our index space
             if global_unit_to_idx is not None and precomputed is not None:
                 unit_sw = np.zeros(n_units)
@@ -353,12 +354,16 @@ class CallawaySantAnnaAggregationMixin:
             else:
                 unit_sw = np.ones(n_units)
 
-            # Weighted indicator: sw_i * 1{G_i == g_k} / sum(sw_all)
-            weighted_indicator = indicator_matrix * (unit_sw / total_weight)[:, np.newaxis]
-            indicator_sum_w = np.sum(weighted_indicator - pg_keepers, axis=1)
+            # s_i * 1{G_i == g_k}
+            weighted_indicator = indicator_matrix * unit_sw[:, np.newaxis]
+            # s_i * p_g_k  (symmetric weight application)
+            weighted_pg_term = pg_keepers[np.newaxis, :] * unit_sw[:, np.newaxis]
+            # s_i * (1{G_i == g_k} - p_g_k) / sum(s_j)
+            indicator_diff = (weighted_indicator - weighted_pg_term) / total_weight
+            indicator_sum_w = np.sum(indicator_diff, axis=1)
 
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                if1_matrix = (weighted_indicator - pg_keepers) / sum_pg_keepers
+                if1_matrix = indicator_diff / sum_pg_keepers
                 if2_matrix = np.outer(indicator_sum_w, pg_keepers) / (sum_pg_keepers**2)
                 wif_matrix = if1_matrix - if2_matrix
                 wif_contrib = wif_matrix @ effects
@@ -386,8 +391,9 @@ class CallawaySantAnnaAggregationMixin:
             nan_result = np.full(n_units, np.nan)
             return nan_result, all_units
 
-        # Scale by 1/n_units to match R's getSE formula
-        psi_wif = wif_contrib / n_units
+        # Scale by 1/total_weight to match R's getSE formula
+        # (for non-survey, total_weight == n_units; for survey, total_weight == sum(sw))
+        psi_wif = wif_contrib / total_weight
 
         # Combine standard and wif terms
         psi_total = psi_standard + psi_wif

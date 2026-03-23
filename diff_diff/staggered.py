@@ -1591,9 +1591,34 @@ class CallawaySantAnna(
                 sw_c_norm = sw_control / np.sum(sw_control)
                 att = float(np.sum(sw_t_norm * treated_residuals))
 
+                # --- Regression nuisance IF correction ---
+                # Account for uncertainty in beta estimation
+                X_c = np.column_stack([np.ones(n_c), X_control])
+                X_t = np.column_stack([np.ones(n_t), X_treated])
+
+                # Weighted bread: (X'WX)^{-1}
+                XWX = X_c.T @ (X_c * sw_control[:, None])
+                try:
+                    XWX_inv = np.linalg.solve(XWX, np.eye(XWX.shape[0]))
+                except np.linalg.LinAlgError:
+                    XWX_inv = np.linalg.lstsq(XWX, np.eye(XWX.shape[0]), rcond=None)[0]
+
+                # Per-control regression score: w_i * x_i * resid_i
+                resid_c = control_change - X_c @ beta
+                score_c = X_c * (sw_control * resid_c)[:, None]
+                asy_lin_rep_reg = score_c @ XWX_inv  # shape (n_c, p)
+
+                # Weighted treated covariate mean
+                X_treated_mean_w = np.average(X_t, axis=0, weights=sw_treated)
+
+                # Regression IF correction for control observations
+                inf_control_reg_corr = asy_lin_rep_reg @ X_treated_mean_w
+
                 # Influence function (survey-weighted)
                 inf_treated = sw_t_norm * (treated_residuals - att)
-                inf_control = -sw_c_norm * (control_change - np.sum(sw_c_norm * control_change))
+                inf_control = (
+                    -sw_c_norm * (control_change - np.dot(X_c, beta)) + inf_control_reg_corr / n_c
+                )
                 inf_func = np.concatenate([inf_treated, inf_control])
 
                 # SE from influence function variance
