@@ -930,6 +930,29 @@ class TestCallawaySantAnnaSurvey:
         )
         assert np.isfinite(result.overall_att)
 
+    def test_reg_covariates_rank_deficient_survey(self, staggered_survey_data):
+        """Collinear covariates with survey should produce finite results."""
+        data = staggered_survey_data.copy()
+        data["x1"] = np.random.default_rng(42).normal(0, 1, len(data))
+        data["x2"] = 2 * data["x1"]  # perfectly collinear
+        sd = SurveyDesign(weights="weight")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = CallawaySantAnna(estimation_method="reg").fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                covariates=["x1", "x2"],
+                aggregate="simple",
+                survey_design=sd,
+            )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+
     def test_reg_covariates_survey_se_scale_invariance(self, staggered_survey_data):
         """SE for reg + covariates + survey must be invariant to weight rescaling."""
         data = staggered_survey_data.copy()

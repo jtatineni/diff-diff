@@ -1623,6 +1623,10 @@ class CallawaySantAnna(
                 weights=sw_control,
             )
 
+            # Zero NaN coefficients for prediction (dropped rank-deficient columns
+            # contribute 0 to the column space projection, matching DR path convention)
+            beta = np.where(np.isfinite(beta), beta, 0.0)
+
             # Predict counterfactual for treated units
             X_treated_with_intercept = np.column_stack([np.ones(n_t), X_treated])
             predicted_control = np.dot(X_treated_with_intercept, beta)
