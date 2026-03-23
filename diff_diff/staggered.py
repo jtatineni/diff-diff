@@ -411,7 +411,7 @@ class CallawaySantAnna(
             "time_periods": time_periods,
             "is_balanced": is_balanced,
             "survey_weights": survey_weights_arr,
-            "df_survey": resolved_survey.df_survey if resolved_survey is not None else None,
+            "df_survey": (len(all_units) - 1) if resolved_survey is not None else None,
         }
 
     def _compute_att_gt_fast(
@@ -1295,6 +1295,18 @@ class CallawaySantAnna(
 
                 raw_w = data[survey_design.weights].values.astype(np.float64)
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+                # Override df_survey with unit-level df (CS is unit-level, not obs-level)
+                n_units_for_df = len(data[unit].unique())
+                survey_metadata = type(survey_metadata)(
+                    weight_type=survey_metadata.weight_type,
+                    effective_n=survey_metadata.effective_n,
+                    design_effect=survey_metadata.design_effect,
+                    sum_weights=survey_metadata.sum_weights,
+                    n_strata=survey_metadata.n_strata,
+                    n_psu=n_units_for_df,  # unit-level for CS
+                    weight_range=survey_metadata.weight_range,
+                    df_survey=n_units_for_df - 1,
+                )
 
         # Pre-compute data structures for efficient ATT(g,t) computation
         precomputed = self._precompute_structures(
@@ -1309,8 +1321,15 @@ class CallawaySantAnna(
             resolved_survey=resolved_survey,
         )
 
-        # Survey df for safe_inference calls
-        df_survey = resolved_survey.df_survey if resolved_survey is not None else None
+        # Survey df for safe_inference calls.
+        # CS operates at unit level, so use n_units - 1 (not n_obs - 1 from
+        # the long panel). For weights-only designs (no strata/PSU), this is
+        # the correct unit-level degrees of freedom.
+        if resolved_survey is not None:
+            n_all_units = len(precomputed["all_units"])
+            df_survey = n_all_units - 1
+        else:
+            df_survey = None
 
         # Compute ATT(g,t) for each group-time combination
         min_period = min(time_periods)

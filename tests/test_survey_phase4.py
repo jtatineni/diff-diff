@@ -739,6 +739,21 @@ class TestTwoStageDiDSurvey:
 class TestCallawaySantAnnaSurvey:
     """Survey design support for CallawaySantAnna."""
 
+    def test_df_survey_is_unit_level(self, staggered_survey_data, survey_design_weights_only):
+        """Survey df should be n_units-1, not n_obs-1 (CS is unit-level)."""
+        result = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        n_units = staggered_survey_data["unit"].nunique()
+        n_obs = len(staggered_survey_data)
+        assert result.survey_metadata.df_survey == n_units - 1
+        assert result.survey_metadata.df_survey != n_obs - 1
+
     def test_smoke_reg_weights_only(self, staggered_survey_data, survey_design_weights_only):
         """CallawaySantAnna regression method works with survey design."""
         result = CallawaySantAnna(estimation_method="reg").fit(
