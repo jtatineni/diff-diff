@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local AI code review using OpenAI Chat Completions API.
+"""Local AI code review using OpenAI Responses API.
 
 Compiles a review prompt from the project's review criteria, methodology registry,
 and code diffs, then sends it to the OpenAI API for structured feedback.
@@ -854,6 +854,7 @@ def apply_token_budget(
 # MAINTENANCE: Update when OpenAI changes pricing.
 PRICING = {
     "gpt-5.4": (2.50, 15.00),
+    "gpt-5.4-pro": (15.00, 60.00),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "o3": (2.00, 8.00),
@@ -1093,10 +1094,16 @@ def compile_prompt(
 # OpenAI API call
 # ---------------------------------------------------------------------------
 
-ENDPOINT = "https://api.openai.com/v1/chat/completions"
+ENDPOINT = "https://api.openai.com/v1/responses"
 DEFAULT_MODEL = "gpt-5.4"
 DEFAULT_TIMEOUT = 300  # seconds
 DEFAULT_MAX_TOKENS = 16384
+REASONING_MAX_TOKENS = 32768
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Return True for models that use internal chain-of-thought reasoning."""
+    return model.startswith(("o1", "o3", "o4")) or "-pro" in model
 
 
 def estimate_tokens(text: str) -> int:
@@ -1105,19 +1112,26 @@ def estimate_tokens(text: str) -> int:
 
 
 def call_openai(
-    prompt: str, model: str, api_key: str
+    prompt: str,
+    model: str,
+    api_key: str,
+    timeout: int = DEFAULT_TIMEOUT,
 ) -> "tuple[str, dict]":
-    """Call the OpenAI Chat Completions API.
+    """Call the OpenAI Responses API.
 
     Returns (content, usage) where usage is the API response's usage dict
-    containing prompt_tokens and completion_tokens.
+    containing input_tokens and output_tokens.
     """
-    payload = {
+    reasoning = _is_reasoning_model(model)
+    max_tokens = REASONING_MAX_TOKENS if reasoning else DEFAULT_MAX_TOKENS
+
+    payload: dict = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
-        "max_completion_tokens": DEFAULT_MAX_TOKENS,
+        "input": prompt,
+        "max_output_tokens": max_tokens,
     }
+    if not reasoning:
+        payload["temperature"] = 0
 
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -1131,7 +1145,7 @@ def call_openai(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = ""
@@ -1165,7 +1179,7 @@ def call_openai(
             sys.exit(1)
     except TimeoutError:
         print(
-            f"Error: Request timed out (>{DEFAULT_TIMEOUT}s). "
+            f"Error: Request timed out (>{timeout}s). "
             "Try a smaller diff or disable --full-registry.",
             file=sys.stderr,
         )
@@ -1174,12 +1188,18 @@ def call_openai(
         print(f"Error: Network error — {e.reason}", file=sys.stderr)
         sys.exit(1)
 
-    choices = result.get("choices", [])
-    if not choices:
-        print("Error: Empty response from OpenAI API.", file=sys.stderr)
+    status = result.get("status")
+    if status != "completed":
+        detail = result.get("incomplete_details") or result.get("error") or ""
+        print(
+            f"Error: OpenAI response status is '{status}' (expected 'completed').",
+            file=sys.stderr,
+        )
+        if detail:
+            print(f"Detail: {detail}", file=sys.stderr)
         sys.exit(1)
 
-    content = choices[0].get("message", {}).get("content", "")
+    content = result.get("output_text", "")
     if not content.strip():
         print("Error: Empty review content from OpenAI API.", file=sys.stderr)
         sys.exit(1)
@@ -1281,6 +1301,12 @@ def main() -> None:
         default=DEFAULT_TOKEN_BUDGET,
         help=f"Max estimated input tokens before dropping context "
         f"(default: {DEFAULT_TOKEN_BUDGET:,})",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_TIMEOUT,
+        help=f"HTTP request timeout in seconds (default: {DEFAULT_TIMEOUT})",
     )
     parser.add_argument(
         "--delta-diff",
@@ -1531,7 +1557,8 @@ def main() -> None:
         )
 
     # Cost estimate
-    cost_str = estimate_cost(est_tokens, DEFAULT_MAX_TOKENS, args.model)
+    max_out = REASONING_MAX_TOKENS if _is_reasoning_model(args.model) else DEFAULT_MAX_TOKENS
+    cost_str = estimate_cost(est_tokens, max_out, args.model)
 
     # Dry-run: print prompt and exit
     if args.dry_run:
@@ -1559,7 +1586,9 @@ def main() -> None:
     if delta_diff_text:
         print("Mode: Delta-diff (changes since last review)", file=sys.stderr)
 
-    review_content, usage = call_openai(prompt, args.model, api_key)
+    review_content, usage = call_openai(
+        prompt, args.model, api_key, timeout=args.timeout
+    )
 
     # Write review output
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
@@ -1603,8 +1632,8 @@ def main() -> None:
             )
 
     # Print completion summary with actual usage
-    actual_input = usage.get("prompt_tokens", 0)
-    actual_output = usage.get("completion_tokens", 0)
+    actual_input = usage.get("input_tokens", 0)
+    actual_output = usage.get("output_tokens", 0)
     actual_cost = estimate_cost(actual_input, actual_output, args.model)
 
     print(f"\nAI Review complete.", file=sys.stderr)
@@ -1615,6 +1644,14 @@ def main() -> None:
             f"{actual_output:,} output",
             file=sys.stderr,
         )
+        reasoning_tokens = usage.get("output_tokens_details", {}).get(
+            "reasoning_tokens", 0
+        )
+        if reasoning_tokens:
+            print(
+                f"  (includes {reasoning_tokens:,} reasoning tokens)",
+                file=sys.stderr,
+            )
         if actual_cost:
             print(f"Actual cost: {actual_cost}", file=sys.stderr)
     else:

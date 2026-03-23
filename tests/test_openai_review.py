@@ -1517,3 +1517,151 @@ class TestIncludeFilesConfinement:
         candidate = os.path.realpath(candidate)
         repo_root_real = os.path.realpath(repo_root)
         assert not candidate.startswith(repo_root_real + os.sep)
+
+
+# ---------------------------------------------------------------------------
+# Responses API migration
+# ---------------------------------------------------------------------------
+
+
+class TestIsReasoningModel:
+    def test_o3_is_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("o3") is True
+
+    def test_o3_mini_is_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("o3-mini") is True
+
+    def test_o3_snapshot_is_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("o3-mini-2025-01-31") is True
+
+    def test_o1_is_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("o1") is True
+
+    def test_o4_mini_is_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("o4-mini") is True
+
+    def test_pro_is_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("gpt-5.4-pro") is True
+
+    def test_pro_snapshot_is_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("gpt-5.4-pro-2026-03-05") is True
+
+    def test_gpt54_is_not_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("gpt-5.4") is False
+
+    def test_gpt41_is_not_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("gpt-4.1") is False
+
+    def test_gpt41_mini_is_not_reasoning(self, review_mod):
+        assert review_mod._is_reasoning_model("gpt-4.1-mini") is False
+
+
+class TestProModelPricing:
+    def test_pro_gets_own_pricing(self, review_mod):
+        """gpt-5.4-pro should not fall back to gpt-5.4 pricing."""
+        pro_cost = review_mod.estimate_cost(1_000_000, 1_000_000, "gpt-5.4-pro")
+        base_cost = review_mod.estimate_cost(1_000_000, 1_000_000, "gpt-5.4")
+        assert pro_cost is not None
+        assert base_cost is not None
+        assert pro_cost != base_cost
+
+    def test_pro_snapshot_matches_pro(self, review_mod):
+        """gpt-5.4-pro-2026-03-05 should match gpt-5.4-pro via prefix."""
+        snapshot = review_mod.estimate_cost(1_000_000, 1_000_000, "gpt-5.4-pro-2026-03-05")
+        base = review_mod.estimate_cost(1_000_000, 1_000_000, "gpt-5.4-pro")
+        assert snapshot == base
+
+
+class TestResponsesAPIConstants:
+    def test_endpoint_is_responses(self, review_mod):
+        assert "responses" in review_mod.ENDPOINT
+        assert "chat/completions" not in review_mod.ENDPOINT
+
+    def test_reasoning_max_tokens_larger(self, review_mod):
+        assert review_mod.REASONING_MAX_TOKENS > review_mod.DEFAULT_MAX_TOKENS
+
+
+class TestCallOpenAIPayload:
+    """Test call_openai() payload construction and response parsing via mocked urllib."""
+
+    @pytest.fixture()
+    def mock_urlopen(self, monkeypatch, review_mod):
+        """Patch urllib.request.urlopen to capture requests and return canned responses."""
+        import io
+        import urllib.request
+
+        captured = {}
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = json.dumps(data).encode("utf-8")
+
+            def read(self):
+                return self._data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        def fake_urlopen(req, timeout=None):
+            captured["request"] = req
+            captured["timeout"] = timeout
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse(captured.get("response_data", {
+                "status": "completed",
+                "output_text": "Review content here.",
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            }))
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        return captured
+
+    def test_standard_model_payload(self, review_mod, mock_urlopen):
+        """Standard model sends input, max_output_tokens, and temperature=0."""
+        content, usage = review_mod.call_openai("test prompt", "gpt-5.4", "fake-key")
+        payload = mock_urlopen["payload"]
+        assert payload["input"] == "test prompt"
+        assert payload["max_output_tokens"] == review_mod.DEFAULT_MAX_TOKENS
+        assert payload["temperature"] == 0
+        assert "messages" not in payload
+        assert "max_completion_tokens" not in payload
+        assert content == "Review content here."
+        assert usage["input_tokens"] == 100
+
+    def test_reasoning_model_payload(self, review_mod, mock_urlopen):
+        """Reasoning model omits temperature and uses REASONING_MAX_TOKENS."""
+        content, _ = review_mod.call_openai("test prompt", "gpt-5.4-pro", "fake-key")
+        payload = mock_urlopen["payload"]
+        assert payload["max_output_tokens"] == review_mod.REASONING_MAX_TOKENS
+        assert "temperature" not in payload
+        assert content == "Review content here."
+
+    def test_request_url_is_responses_endpoint(self, review_mod, mock_urlopen):
+        review_mod.call_openai("test", "gpt-5.4", "fake-key")
+        assert mock_urlopen["request"].full_url == review_mod.ENDPOINT
+
+    def test_timeout_passed_through(self, review_mod, mock_urlopen):
+        review_mod.call_openai("test", "gpt-5.4", "fake-key", timeout=900)
+        assert mock_urlopen["timeout"] == 900
+
+    def test_incomplete_status_exits(self, review_mod, mock_urlopen):
+        """Non-completed status should cause sys.exit."""
+        mock_urlopen["response_data"] = {
+            "status": "failed",
+            "output_text": "",
+            "usage": {},
+        }
+        with pytest.raises(SystemExit):
+            review_mod.call_openai("test", "gpt-5.4", "fake-key")
+
+    def test_empty_output_text_exits(self, review_mod, mock_urlopen):
+        """Empty output_text should cause sys.exit."""
+        mock_urlopen["response_data"] = {
+            "status": "completed",
+            "output_text": "   ",
+            "usage": {},
+        }
+        with pytest.raises(SystemExit):
+            review_mod.call_openai("test", "gpt-5.4", "fake-key")
