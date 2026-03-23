@@ -1099,7 +1099,11 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 w_t = w_by_time.get(t, 0.0)
                 n0_i = n0_by_unit.get(u, 1)
                 n0_t = n0_by_time.get(t, 1)
-                v_untreated[j] = -(w_i / n0_i + w_t / n0_t - w_total / n0_denom)
+                base_v = -(w_i / n0_i + w_t / n0_t - w_total / n0_denom)
+                # WLS projection requires per-obs survey weight factor
+                if survey_weights_0 is not None:
+                    base_v *= survey_weights_0[j]
+                v_untreated[j] = base_v
         else:
             v_untreated = self._compute_v_untreated_with_covariates(
                 df_0,
@@ -1299,8 +1303,10 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             A0tA0_dense = A0tA0_sparse.toarray()
             z, _, _, _ = np.linalg.lstsq(A0tA0_dense, A1_w, rcond=None)
 
-        # v_untreated = -A_0 z (sparse @ dense -> dense)
+        # v_untreated = -[W_0] A_0 z (WLS projection requires per-obs weight)
         v_untreated = -(A_0 @ z)
+        if survey_weights_0 is not None:
+            v_untreated = v_untreated * survey_weights_0
         return v_untreated
 
     def _compute_auxiliary_residuals_treated(
@@ -1894,6 +1900,7 @@ def imputation_did(
     covariates: Optional[List[str]] = None,
     aggregate: Optional[str] = None,
     balance_e: Optional[int] = None,
+    survey_design: object = None,
     **kwargs,
 ) -> ImputationDiDResults:
     """
@@ -1945,4 +1952,5 @@ def imputation_did(
         covariates=covariates,
         aggregate=aggregate,
         balance_e=balance_e,
+        survey_design=survey_design,
     )

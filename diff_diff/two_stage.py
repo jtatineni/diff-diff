@@ -1614,6 +1614,7 @@ def two_stage_did(
     covariates: Optional[List[str]] = None,
     aggregate: Optional[str] = None,
     balance_e: Optional[int] = None,
+    survey_design: object = None,
     **kwargs,
 ) -> TwoStageDiDResults:
     """
@@ -1665,4 +1666,5 @@ def two_stage_did(
         covariates=covariates,
         aggregate=aggregate,
         balance_e=balance_e,
+        survey_design=survey_design,
     )
