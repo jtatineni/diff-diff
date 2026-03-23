@@ -62,15 +62,26 @@ class CallawaySantAnnaAggregationMixin:
         gt_pairs = []
         groups_for_gt = []
 
+        # For survey: compute fixed per-cohort weight sums from the full
+        # unit-level sample (matching R's did::aggte pg = n_g / N).
+        survey_cohort_weights = None
+        if precomputed is not None and precomputed.get("survey_weights") is not None:
+            sw = precomputed["survey_weights"]
+            unit_cohorts = precomputed["unit_cohorts"]
+            survey_cohort_weights = {}
+            for g in np.unique(unit_cohorts):
+                if g > 0:  # exclude never-treated (0)
+                    survey_cohort_weights[g] = float(np.sum(sw[unit_cohorts == g]))
+
         for (g, t), data in group_time_effects.items():
             # Only include post-treatment effects (t >= g - anticipation)
             # Pre-treatment effects are for parallel trends, not overall ATT
             if t < g - self.anticipation:
                 continue
             effects.append(data["effect"])
-            # Use survey_weight_sum for aggregation when available
-            if data.get("survey_weight_sum") is not None:
-                weights_list.append(data["survey_weight_sum"])
+            # Use fixed cohort-level survey weight sum for aggregation
+            if survey_cohort_weights is not None and g in survey_cohort_weights:
+                weights_list.append(survey_cohort_weights[g])
             else:
                 weights_list.append(data["n_treated"])
             gt_pairs.append((g, t))
@@ -478,12 +489,25 @@ class CallawaySantAnnaAggregationMixin:
         # Organize effects by relative time, keeping track of (g,t) pairs
         effects_by_e: Dict[int, List[Tuple[Tuple[Any, Any], float, float]]] = {}
 
+        # Fixed per-cohort survey weights for aggregation
+        survey_cohort_weights = None
+        if precomputed is not None and precomputed.get("survey_weights") is not None:
+            sw = precomputed["survey_weights"]
+            unit_cohorts = precomputed["unit_cohorts"]
+            survey_cohort_weights = {}
+            for g in np.unique(unit_cohorts):
+                if g > 0:
+                    survey_cohort_weights[g] = float(np.sum(sw[unit_cohorts == g]))
+
         for (g, t), data in group_time_effects.items():
             e = t - g  # Relative time
             if e not in effects_by_e:
                 effects_by_e[e] = []
-            # Use survey_weight_sum for aggregation when available
-            w = data.get("survey_weight_sum", data["n_treated"])
+            w = (
+                survey_cohort_weights[g]
+                if survey_cohort_weights is not None and g in survey_cohort_weights
+                else data["n_treated"]
+            )
             effects_by_e[e].append(
                 (
                     (g, t),  # Keep track of the (g,t) pair
@@ -507,7 +531,11 @@ class CallawaySantAnnaAggregationMixin:
                     e = t - g
                     if e not in balanced_effects:
                         balanced_effects[e] = []
-                    w = data.get("survey_weight_sum", data["n_treated"])
+                    w = (
+                        survey_cohort_weights[g]
+                        if survey_cohort_weights is not None and g in survey_cohort_weights
+                        else data["n_treated"]
+                    )
                     balanced_effects[e].append(
                         (
                             (g, t),
