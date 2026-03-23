@@ -854,7 +854,7 @@ def apply_token_budget(
 # MAINTENANCE: Update when OpenAI changes pricing.
 PRICING = {
     "gpt-5.4": (2.50, 15.00),
-    "gpt-5.4-pro": (15.00, 60.00),
+    "gpt-5.4-pro": (30.00, 180.00),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "o3": (2.00, 8.00),
@@ -1209,6 +1209,24 @@ def call_openai(
 
     content = _extract_response_text(result)
 
+    # Treat truncated responses as errors — partial reviews may suppress findings.
+    status = result.get("status")
+    if content.strip() and status == "incomplete":
+        detail = result.get("incomplete_details") or ""
+        print(
+            "Error: Review was truncated (status='incomplete'). "
+            "Output may be missing findings.",
+            file=sys.stderr,
+        )
+        if detail:
+            print(f"Detail: {detail}", file=sys.stderr)
+        print(
+            "Try reducing diff size, disabling --full-registry, or "
+            "lowering --context to 'minimal'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if not content.strip():
         # No usable content — report the best diagnostic we have.
         status = result.get("status", "<missing>")
@@ -1244,7 +1262,7 @@ def _read_file(path: str, label: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run local AI code review via OpenAI Chat Completions API."
+        description="Run local AI code review via OpenAI Responses API."
     )
     parser.add_argument(
         "--review-criteria",

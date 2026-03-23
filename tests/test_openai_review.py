@@ -1710,19 +1710,37 @@ class TestCallOpenAIPayload:
         content, _ = review_mod.call_openai("test", "gpt-5.4", "fake-key")
         assert content == "Good review."
 
-    def test_incomplete_status_with_valid_content_succeeds(self, review_mod, mock_urlopen):
-        """Non-completed status should still return content when output is usable."""
+    def test_incomplete_status_with_content_exits(self, review_mod, mock_urlopen):
+        """Truncated response (status=incomplete) should exit even if content exists."""
         mock_urlopen["response_data"] = {
             "status": "incomplete",
             "output_text": None,
             "output": [{
                 "type": "message",
-                "content": [{"type": "output_text", "text": "Partial but usable."}],
+                "content": [{"type": "output_text", "text": "Partial review."}],
             }],
             "usage": {"input_tokens": 10, "output_tokens": 5},
         }
-        content, _ = review_mod.call_openai("test", "gpt-5.4", "fake-key")
-        assert content == "Partial but usable."
+        with pytest.raises(SystemExit):
+            review_mod.call_openai("test", "gpt-5.4", "fake-key")
+
+    def test_incomplete_status_surfaces_details(self, review_mod, mock_urlopen, capsys):
+        """Incomplete response should print incomplete_details to stderr."""
+        mock_urlopen["response_data"] = {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output_text": None,
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "Partial."}],
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        with pytest.raises(SystemExit):
+            review_mod.call_openai("test", "gpt-5.4", "fake-key")
+        captured = capsys.readouterr()
+        assert "truncated" in captured.err.lower()
+        assert "max_output_tokens" in captured.err
 
     def test_output_text_convenience_field_used(self, review_mod, mock_urlopen):
         """When output_text is populated (SDK-style), use it directly."""
