@@ -1340,22 +1340,34 @@ class ContinuousDiD:
         # Event study bootstrap — compute weights per event-time bin
         es_keys = sorted(event_study_effects.keys()) if event_study_effects else []
         boot_es = {e: np.zeros(self.n_bootstrap) for e in es_keys}
-        # Per-(g,t) weight within event-time bin
+        # Per-(g,t) weight within event-time bin — use survey-weighted cohort
+        # masses when available, matching _aggregate_event_study.
+        unit_sw = precomp.get("unit_survey_weights")
+        unit_cohorts = precomp["unit_cohorts"]
         es_cell_weights: Dict[Tuple, float] = {}
         if event_study_effects is not None:
-            # Build event-time bin weights from n_treated
             from collections import defaultdict
 
             es_bin_total: Dict[int, float] = defaultdict(float)
             for gt, r in gt_results.items():
                 g_val, t_val = gt
                 e = t_val - g_val
-                es_bin_total[e] += float(r["n_treated"])
+                if unit_sw is not None:
+                    g_mask = unit_cohorts == g_val
+                    cell_mass = float(np.sum(unit_sw[g_mask]))
+                else:
+                    cell_mass = float(r["n_treated"])
+                es_bin_total[e] += cell_mass
             for gt, r in gt_results.items():
                 g_val, t_val = gt
                 e = t_val - g_val
+                if unit_sw is not None:
+                    g_mask = unit_cohorts == g_val
+                    cell_mass = float(np.sum(unit_sw[g_mask]))
+                else:
+                    cell_mass = float(r["n_treated"])
                 if es_bin_total[e] > 0:
-                    es_cell_weights[gt] = float(r["n_treated"]) / es_bin_total[e]
+                    es_cell_weights[gt] = cell_mass / es_bin_total[e]
 
         # Helper to bootstrap a single (g,t) cell
         def _bootstrap_gt_cell(gt, info):

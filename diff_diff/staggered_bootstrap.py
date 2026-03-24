@@ -221,9 +221,24 @@ class CallawaySantAnnaBootstrapMixin:
         post_treatment_indices = np.where(post_treatment_mask)[0]
 
         # Compute aggregation weights for overall ATT (post-treatment only)
-        all_n_treated = np.array(
-            [group_time_effects[gt]["n_treated"] for gt in gt_pairs], dtype=float
-        )
+        # When survey weights are present, use survey-weighted cohort masses
+        # (survey_weight_sum) instead of raw n_treated counts, matching the
+        # analytical _aggregate_simple() path in staggered_aggregation.py.
+        survey_w = precomputed.get("survey_weights") if precomputed is not None else None
+        if survey_w is not None:
+            all_n_treated = np.array(
+                [
+                    group_time_effects[gt].get(
+                        "survey_weight_sum", group_time_effects[gt]["n_treated"]
+                    )
+                    for gt in gt_pairs
+                ],
+                dtype=float,
+            )
+        else:
+            all_n_treated = np.array(
+                [group_time_effects[gt]["n_treated"] for gt in gt_pairs], dtype=float
+            )
         post_n_treated = all_n_treated[post_treatment_mask]
 
         # Filter out NaN ATT(g,t) cells from overall aggregation (matches analytical path)
@@ -304,8 +319,6 @@ class CallawaySantAnnaBootstrapMixin:
         )
 
         if _use_survey_bootstrap:
-            from diff_diff.survey import aggregate_to_psu
-
             # PSU-level multiplier weights
             psu_weights, psu_ids = _generate_survey_multiplier_weights_batch(
                 self.n_bootstrap, resolved_survey_unit, self.bootstrap_weight_type, rng
@@ -535,6 +548,16 @@ class CallawaySantAnnaBootstrapMixin:
         n_global_units: Optional[int] = None,
     ) -> Dict[int, Dict[str, Any]]:
         """Prepare aggregation info for event study bootstrap."""
+        # Use survey-weighted cohort masses when survey weights are present,
+        # matching the analytical _aggregate_event_study() path.
+        _has_survey = precomputed is not None and precomputed.get("survey_weights") is not None
+
+        def _agg_weight(g: Any, t: Any) -> float:
+            data = group_time_effects[(g, t)]
+            if _has_survey:
+                return data.get("survey_weight_sum", data["n_treated"])
+            return data["n_treated"]
+
         # Organize by relative time
         effects_by_e: Dict[int, List[Tuple[int, float, float]]] = {}
 
@@ -546,7 +569,7 @@ class CallawaySantAnnaBootstrapMixin:
                 (
                     j,  # index in gt_pairs
                     group_time_effects[(g, t)]["effect"],
-                    group_time_effects[(g, t)]["n_treated"],
+                    _agg_weight(g, t),
                 )
             )
 
@@ -567,7 +590,7 @@ class CallawaySantAnnaBootstrapMixin:
                         (
                             j,
                             group_time_effects[(g, t)]["effect"],
-                            group_time_effects[(g, t)]["n_treated"],
+                            _agg_weight(g, t),
                         )
                     )
             effects_by_e = balanced_effects

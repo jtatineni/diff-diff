@@ -90,6 +90,7 @@ class ImputationDiDBootstrapMixin:
             weights: np.ndarray,
             cluster_var: str,
             kept_cov_mask: Optional[np.ndarray] = None,
+            survey_weights_0: Optional[np.ndarray] = None,
         ) -> Tuple[np.ndarray, np.ndarray]: ...
 
         @staticmethod
@@ -129,6 +130,7 @@ class ImputationDiDBootstrapMixin:
         treatment_groups: List[Any],
         tau_hat: np.ndarray,
         balance_e: Optional[int],
+        survey_weights_0: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """
         Pre-compute cluster-level influence function sums for each bootstrap target.
@@ -158,6 +160,7 @@ class ImputationDiDBootstrapMixin:
             delta_hat=delta_hat,
             cluster_var=cluster_var,
             kept_cov_mask=kept_cov_mask,
+            survey_weights_0=survey_weights_0,
         )
 
         # Overall ATT

@@ -461,6 +461,12 @@ class CallawaySantAnna(
         else:
             survey_weights_arr = None
 
+        resolved_survey_unit = (
+            self._collapse_survey_to_unit_level(resolved_survey, df, unit, all_units)
+            if resolved_survey is not None
+            else None
+        )
+
         return {
             "all_units": all_units,
             "unit_to_idx": unit_to_idx,
@@ -474,12 +480,10 @@ class CallawaySantAnna(
             "is_balanced": is_balanced,
             "survey_weights": survey_weights_arr,
             "resolved_survey": resolved_survey,
-            "resolved_survey_unit": (
-                self._collapse_survey_to_unit_level(resolved_survey, df, unit, all_units)
-                if resolved_survey is not None
-                else None
+            "resolved_survey_unit": resolved_survey_unit,
+            "df_survey": (
+                resolved_survey_unit.df_survey if resolved_survey_unit is not None else None
             ),
-            "df_survey": (resolved_survey.df_survey if resolved_survey is not None else None),
         }
 
     def _compute_att_gt_fast(
@@ -1374,15 +1378,9 @@ class CallawaySantAnna(
             resolved_survey=resolved_survey,
         )
 
-        # Survey df for safe_inference calls.
-        # CS operates at unit level, so use n_units - 1 (not n_obs - 1 from
-        # the long panel). For weights-only designs (no strata/PSU), this is
-        # the correct unit-level degrees of freedom.
-        if resolved_survey is not None:
-            n_all_units = len(precomputed["all_units"])
-            df_survey = n_all_units - 1
-        else:
-            df_survey = None
+        # Survey df for safe_inference calls — use the unit-level resolved
+        # survey df computed in _precompute_structures for consistency.
+        df_survey = precomputed.get("df_survey")
 
         # Compute ATT(g,t) for each group-time combination
         min_period = min(time_periods)
