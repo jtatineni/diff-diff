@@ -248,6 +248,8 @@ class SyntheticDiD(DifferenceInDifferences):
 
         # Resolve survey design
         from diff_diff.survey import (
+            _extract_unit_survey_weights,
+            _resolve_pweight_only,
             _resolve_survey_for_fit,
             _validate_unit_constant_survey,
         )
@@ -255,24 +257,7 @@ class SyntheticDiD(DifferenceInDifferences):
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
-
-        if resolved_survey is not None:
-            if resolved_survey.weight_type != "pweight":
-                raise ValueError(
-                    "SyntheticDiD survey support requires weight_type='pweight'. "
-                    "Got '{}'.".format(resolved_survey.weight_type)
-                )
-            if (
-                resolved_survey.strata is not None
-                or resolved_survey.psu is not None
-                or resolved_survey.fpc is not None
-            ):
-                raise NotImplementedError(
-                    "SyntheticDiD does not yet support strata/PSU/FPC in "
-                    "SurveyDesign. Use SurveyDesign(weights=...) only. Full "
-                    "design-based bootstrap is planned for the Bootstrap + "
-                    "Survey Interaction phase."
-                )
+        _resolve_pweight_only(resolved_survey, "SyntheticDiD")
 
         # Validate treatment is binary
         validate_binary(data[treatment].values, "treatment")
@@ -347,9 +332,8 @@ class SyntheticDiD(DifferenceInDifferences):
         # Validate and extract survey weights
         if resolved_survey is not None:
             _validate_unit_constant_survey(data, unit, survey_design)
-            unit_w = data.groupby(unit)[survey_design.weights].first()
-            w_treated = unit_w.loc[treated_units].values.astype(np.float64)
-            w_control = unit_w.loc[control_units].values.astype(np.float64)
+            w_treated = _extract_unit_survey_weights(data, unit, survey_design, treated_units)
+            w_control = _extract_unit_survey_weights(data, unit, survey_design, control_units)
         else:
             w_treated = None
             w_control = None

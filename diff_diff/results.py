@@ -841,12 +841,10 @@ class SyntheticDiDResults:
             result["weight_type"] = sm.weight_type
             result["effective_n"] = sm.effective_n
             result["design_effect"] = sm.design_effect
-            if sm.n_strata is not None:
-                result["n_strata"] = sm.n_strata
-            if sm.n_psu is not None:
-                result["n_psu"] = sm.n_psu
-            if sm.df_survey is not None:
-                result["df_survey"] = sm.df_survey
+            result["sum_weights"] = sm.sum_weights
+            result["n_strata"] = sm.n_strata
+            result["n_psu"] = sm.n_psu
+            result["df_survey"] = sm.df_survey
         return result
 
     def to_dataframe(self) -> pd.DataFrame:

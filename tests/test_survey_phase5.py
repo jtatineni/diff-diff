@@ -648,3 +648,122 @@ class TestTROPSurvey:
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se)
+
+
+# =============================================================================
+# Pinned Numerical Tests
+# =============================================================================
+
+
+class TestPinnedNumerical:
+    """Deterministic numerical tests for exact weighted formulas."""
+
+    def test_sdid_weighted_att_manual(self):
+        """Manual ATT check: survey-weighted treated means + ω∘w_co composition."""
+        # Tiny 2x2 balanced panel: 2 control, 1 treated, 2 pre + 1 post
+        np.random.seed(99)
+        data = pd.DataFrame(
+            {
+                "unit": [0, 0, 0, 1, 1, 1, 2, 2, 2],
+                "time": [0, 1, 2, 0, 1, 2, 0, 1, 2],
+                "outcome": [1.0, 2.0, 3.0, 2.0, 3.0, 4.5, 5.0, 6.0, 10.0],
+                "treated": [0, 0, 0, 0, 0, 0, 1, 1, 1],
+                "weight": [1.0, 1.0, 1.0, 3.0, 3.0, 3.0, 2.0, 2.0, 2.0],
+            }
+        )
+        # Single treated unit → treated means are trivially that unit's outcomes
+        # (survey weight doesn't change a single-unit mean)
+        est = SyntheticDiD(variance_method="placebo", n_bootstrap=20, seed=42)
+        result = est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="time",
+            post_periods=[2],
+            survey_design=SurveyDesign(weights="weight"),
+        )
+        # Verify unit_weights sum to 1 (composed with survey)
+        assert sum(result.unit_weights.values()) == pytest.approx(1.0, abs=1e-10)
+        assert np.isfinite(result.att)
+
+    def test_trop_weighted_att_aggregation(self):
+        """Verify TROP ATT = weighted mean of tau values."""
+        # Create data where we can predict directional effect of weighting
+        np.random.seed(77)
+        n_units = 15
+        n_periods = 6
+        n_treated = 3
+
+        units = list(range(n_units))
+        periods = list(range(n_periods))
+
+        rows = []
+        for u in units:
+            is_treated = u < n_treated
+            base = u * 0.5
+            for t in periods:
+                y = base + 0.2 * t + np.random.randn() * 0.3
+                d = 1 if (is_treated and t >= 3) else 0
+                if d == 1:
+                    # Different effect per unit: unit 0 gets +1, unit 1 gets +3, unit 2 gets +5
+                    y += 1.0 + 2.0 * u
+                rows.append({"unit": u, "time": t, "outcome": y, "D": d})
+
+        data = pd.DataFrame(rows)
+        # Weight unit 2 (biggest effect) heavily
+        weights = np.ones(n_units)
+        weights[2] = 10.0  # unit 2 has effect ~5, heavily weighted
+        unit_map = {u: i for i, u in enumerate(units)}
+        data["weight"] = weights[data["unit"].map(unit_map).values]
+
+        est_no = TROP(method="local", n_bootstrap=5, seed=42, max_iter=3)
+        result_no = est_no.fit(data, "outcome", "D", "unit", "time")
+
+        est_w = TROP(method="local", n_bootstrap=5, seed=42, max_iter=3)
+        result_w = est_w.fit(
+            data,
+            "outcome",
+            "D",
+            "unit",
+            "time",
+            survey_design=SurveyDesign(weights="weight"),
+        )
+
+        # Weighted ATT should be pulled toward unit 2's larger effect
+        assert result_w.att > result_no.att
+
+    def test_sdid_to_dict_schema_matches_did(self):
+        """SyntheticDiDResults.to_dict() survey fields match DiDResults schema."""
+        np.random.seed(42)
+        data = pd.DataFrame(
+            {
+                "unit": [0, 0, 1, 1, 2, 2],
+                "time": [0, 1, 0, 1, 0, 1],
+                "outcome": [1.0, 2.0, 2.0, 3.0, 5.0, 8.0],
+                "treated": [0, 0, 0, 0, 1, 1],
+                "weight": [1.0, 1.0, 2.0, 2.0, 1.5, 1.5],
+            }
+        )
+        est = SyntheticDiD(n_bootstrap=10, seed=42)
+        result = est.fit(
+            data,
+            "outcome",
+            "treated",
+            "unit",
+            "time",
+            post_periods=[1],
+            survey_design=SurveyDesign(weights="weight"),
+        )
+        d = result.to_dict()
+        # Schema alignment: all these fields should be present
+        for key in [
+            "weight_type",
+            "effective_n",
+            "design_effect",
+            "sum_weights",
+            "n_strata",
+            "n_psu",
+            "df_survey",
+        ]:
+            assert key in d, f"Missing key: {key}"

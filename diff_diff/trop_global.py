@@ -537,8 +537,9 @@ class TROPGlobalMixin:
 
         # Extract per-unit survey weights for weighted ATT aggregation
         if resolved_survey is not None:
-            unit_w = data.groupby(unit)[survey_design.weights].first()
-            unit_weight_arr = np.array([unit_w[u] for u in all_units], dtype=np.float64)
+            from diff_diff.survey import _extract_unit_survey_weights
+
+            unit_weight_arr = _extract_unit_survey_weights(data, unit, survey_design, all_units)
         else:
             unit_weight_arr = None
 
@@ -1007,8 +1008,9 @@ class TROPGlobalMixin:
 
         # Extract per-unit survey weights for weighted ATT in bootstrap
         if survey_design is not None and survey_design.weights is not None:
-            unit_w = data.groupby(unit)[survey_design.weights].first()
-            local_weight_arr = np.array([unit_w[u] for u in all_units], dtype=np.float64)
+            from diff_diff.survey import _extract_unit_survey_weights
+
+            local_weight_arr = _extract_unit_survey_weights(data, unit, survey_design, all_units)
         else:
             local_weight_arr = None
 

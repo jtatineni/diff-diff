@@ -988,9 +988,12 @@ class TROPLocalMixin:
 
         # Extract survey weights from bootstrap data (units are renamed)
         if survey_design is not None and survey_design.weights is not None:
-            unit_w = data.groupby(unit)[survey_design.weights].first()
+            from diff_diff.survey import _extract_unit_survey_weights
+
             local_all_units = sorted(data[unit].unique())
-            local_weight_arr = np.array([unit_w[u] for u in local_all_units], dtype=np.float64)
+            local_weight_arr = _extract_unit_survey_weights(
+                data, unit, survey_design, local_all_units
+            )
         else:
             local_weight_arr = None
 

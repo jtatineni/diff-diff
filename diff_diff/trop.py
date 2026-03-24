@@ -454,6 +454,8 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
 
         # Resolve survey design
         from diff_diff.survey import (
+            _extract_unit_survey_weights,
+            _resolve_pweight_only,
             _resolve_survey_for_fit,
             _validate_unit_constant_survey,
         )
@@ -461,24 +463,8 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         resolved_survey, _survey_weights, _survey_wt, survey_metadata = _resolve_survey_for_fit(
             survey_design, data, "analytical"
         )
-
+        _resolve_pweight_only(resolved_survey, "TROP")
         if resolved_survey is not None:
-            if resolved_survey.weight_type != "pweight":
-                raise ValueError(
-                    "TROP survey support requires weight_type='pweight'. "
-                    "Got '{}'.".format(resolved_survey.weight_type)
-                )
-            if (
-                resolved_survey.strata is not None
-                or resolved_survey.psu is not None
-                or resolved_survey.fpc is not None
-            ):
-                raise NotImplementedError(
-                    "TROP does not yet support strata/PSU/FPC in "
-                    "SurveyDesign. Use SurveyDesign(weights=...) only. Full "
-                    "design-based bootstrap is planned for the Bootstrap + "
-                    "Survey Interaction phase."
-                )
             _validate_unit_constant_survey(data, unit, survey_design)
 
         # Dispatch based on estimation method
@@ -495,18 +481,14 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             )
 
         # Below is the local method (default)
-        # Extract unit-level survey weights
-        if resolved_survey is not None:
-            unit_w = data.groupby(unit)[survey_design.weights].first()
-            unit_weight_arr = np.array(
-                [unit_w[u] for u in sorted(data[unit].unique())],
-                dtype=np.float64,
-            )
-        else:
-            unit_weight_arr = None
-
         # Get unique units and periods
         all_units = sorted(data[unit].unique())
+
+        # Extract unit-level survey weights
+        if resolved_survey is not None:
+            unit_weight_arr = _extract_unit_survey_weights(data, unit, survey_design, all_units)
+        else:
+            unit_weight_arr = None
         all_periods = sorted(data[time].unique())
 
         n_units = len(all_units)
