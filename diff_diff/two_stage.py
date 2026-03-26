@@ -585,6 +585,8 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     aggregate=aggregate,
                     resolved_survey=resolved_survey,
                 )
+            except NotImplementedError:
+                raise  # Don't swallow explicit rejections (e.g. lonely_psu="adjust")
             except Exception as e:
                 warnings.warn(
                     f"Bootstrap failed: {e}. Skipping bootstrap inference.",

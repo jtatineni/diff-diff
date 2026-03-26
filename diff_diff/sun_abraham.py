@@ -502,11 +502,20 @@ class SunAbraham:
             raise ValueError(f"Missing columns: {missing}")
 
         # Resolve survey design if provided
-        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+        from diff_diff.survey import (
+            _resolve_effective_cluster,
+            _resolve_survey_for_fit,
+            _validate_unit_constant_survey,
+        )
 
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
+
+        # Validate survey columns are constant within units (required for
+        # unit-level collapse in Rao-Wu bootstrap)
+        if resolved_survey is not None:
+            _validate_unit_constant_survey(data, unit, survey_design)
 
         # Bootstrap + survey supported via Rao-Wu rescaled bootstrap.
         # Determine Rao-Wu eligibility from the *original* survey_design
