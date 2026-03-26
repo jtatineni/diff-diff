@@ -880,6 +880,24 @@ class TestCallawaySantAnnaSurvey:
         assert result.group_effects is not None
         assert len(result.group_effects) > 0
 
+    def test_aggregate_group_full_design(self, staggered_survey_data):
+        """aggregate='group' with full design uses design-based SEs."""
+        sd_full = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        result = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="group",
+            survey_design=sd_full,
+        )
+        assert result.group_effects is not None
+        assert len(result.group_effects) > 0
+        for g, info in result.group_effects.items():
+            assert np.isfinite(info["effect"])
+            assert np.isfinite(info["se"])
+
     def test_aggregate_all_with_survey(self, staggered_survey_data, survey_design_weights_only):
         """aggregate='all' works with weights-only survey design."""
         result = CallawaySantAnna(estimation_method="reg").fit(

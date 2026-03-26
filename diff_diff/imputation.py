@@ -208,7 +208,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             pweight only (aweight/fweight raise ValueError). FPC raises
             NotImplementedError. PSU is used as cluster variable for Theorem 3
             variance. Strata enters survey df for t-distribution inference.
-            Requires analytical inference (n_bootstrap=0).
+            Both analytical (n_bootstrap=0) and bootstrap inference are supported.
 
         Returns
         -------
@@ -1973,7 +1973,7 @@ def imputation_did(
         pweight only (aweight/fweight raise ValueError). FPC raises
         NotImplementedError. PSU is used as cluster variable for Theorem 3
         variance. Strata enters survey df for t-distribution inference.
-        Requires analytical inference (n_bootstrap=0).
+        Both analytical (n_bootstrap=0) and bootstrap inference are supported.
     **kwargs
         Additional keyword arguments passed to ImputationDiD constructor.
 
