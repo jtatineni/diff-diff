@@ -16,7 +16,7 @@ References
 
 import warnings
 from dataclasses import dataclass, field, replace
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -62,6 +62,9 @@ class SurveyDesign:
     weight_type: str = "pweight"
     nest: bool = False
     lonely_psu: str = "remove"
+    replicate_weights: Optional[List[str]] = None
+    replicate_method: Optional[str] = None
+    fay_rho: float = 0.0
 
     def __post_init__(self):
         valid_weight_types = {"pweight", "fweight", "aweight"}
@@ -74,6 +77,43 @@ class SurveyDesign:
             raise ValueError(
                 f"lonely_psu must be one of {valid_lonely}, " f"got '{self.lonely_psu}'"
             )
+        # Replicate weight validation
+        valid_rep_methods = {"BRR", "Fay", "JK1", "JKn"}
+        if self.replicate_method is not None:
+            if self.replicate_method not in valid_rep_methods:
+                raise ValueError(
+                    f"replicate_method must be one of {valid_rep_methods}, "
+                    f"got '{self.replicate_method}'"
+                )
+            if self.replicate_weights is None:
+                raise ValueError(
+                    "replicate_weights must be provided when replicate_method is set"
+                )
+        if self.replicate_weights is not None and self.replicate_method is None:
+            raise ValueError(
+                "replicate_method must be provided when replicate_weights is set"
+            )
+        if self.replicate_method == "Fay":
+            if not (0 < self.fay_rho < 1):
+                raise ValueError(
+                    f"fay_rho must be in (0, 1) for Fay's method, got {self.fay_rho}"
+                )
+        elif self.replicate_method is not None and self.fay_rho != 0.0:
+            raise ValueError(
+                f"fay_rho must be 0 for method '{self.replicate_method}', "
+                f"got {self.fay_rho}"
+            )
+        # Replicate weights are mutually exclusive with strata/psu/fpc
+        if self.replicate_weights is not None:
+            if self.strata is not None or self.psu is not None or self.fpc is not None:
+                raise ValueError(
+                    "replicate_weights cannot be combined with strata/psu/fpc. "
+                    "Replicate weights encode the design structure implicitly."
+                )
+            if self.weights is None:
+                raise ValueError(
+                    "Full-sample weights must be provided alongside replicate_weights"
+                )
 
     def resolve(self, data: pd.DataFrame) -> "ResolvedSurveyDesign":
         """
@@ -102,17 +142,24 @@ class SurveyDesign:
                 raise ValueError("Weights contain NaN values")
             if np.any(~np.isfinite(raw_weights)):
                 raise ValueError("Weights contain Inf values")
-            if np.any(raw_weights <= 0):
-                raise ValueError("Weights must be strictly positive")
+            if np.any(raw_weights < 0):
+                raise ValueError("Weights must be non-negative")
+            if np.any(raw_weights == 0) and np.all(raw_weights == 0):
+                raise ValueError(
+                    "All weights are zero. At least one observation must "
+                    "have a positive weight."
+                )
 
-            # fweight validation: must be positive integers
+            # fweight validation: must be non-negative integers
             if self.weight_type == "fweight":
-                fractional = raw_weights - np.round(raw_weights)
-                if np.any(np.abs(fractional) > 1e-10):
-                    raise ValueError(
-                        "Frequency weights (fweight) must be positive integers. "
-                        "Fractional values detected. Use pweight for non-integer weights."
-                    )
+                pos_mask = raw_weights > 0
+                if np.any(pos_mask):
+                    fractional = raw_weights[pos_mask] - np.round(raw_weights[pos_mask])
+                    if np.any(np.abs(fractional) > 1e-10):
+                        raise ValueError(
+                            "Frequency weights (fweight) must be non-negative integers. "
+                            "Fractional values detected. Use pweight for non-integer weights."
+                        )
 
             # Normalize: pweights/aweights to sum=n (mean=1); fweights unchanged
             if self.weight_type in ("pweight", "aweight"):
@@ -121,6 +168,43 @@ class SurveyDesign:
                 weights = raw_weights.copy()
         else:
             weights = np.ones(n, dtype=np.float64)
+
+        # --- Replicate weights (short-circuit strata/psu/fpc) ---
+        if self.replicate_weights is not None:
+            rep_cols = self.replicate_weights
+            for col in rep_cols:
+                if col not in data.columns:
+                    raise ValueError(
+                        f"Replicate weight column '{col}' not found in data"
+                    )
+            rep_arr = np.column_stack(
+                [data[col].values.astype(np.float64) for col in rep_cols]
+            )
+            if np.any(np.isnan(rep_arr)):
+                raise ValueError("Replicate weights contain NaN values")
+            if np.any(~np.isfinite(rep_arr)):
+                raise ValueError("Replicate weights contain Inf values")
+            if np.any(rep_arr < 0):
+                raise ValueError("Replicate weights must be non-negative")
+            n_rep = rep_arr.shape[1]
+            if n_rep < 2:
+                raise ValueError(
+                    "At least 2 replicate weight columns are required"
+                )
+            return ResolvedSurveyDesign(
+                weights=weights,
+                weight_type=self.weight_type,
+                strata=None,
+                psu=None,
+                fpc=None,
+                n_strata=0,
+                n_psu=0,
+                lonely_psu=self.lonely_psu,
+                replicate_weights=rep_arr,
+                replicate_method=self.replicate_method,
+                fay_rho=self.fay_rho,
+                n_replicates=n_rep,
+            )
 
         # --- Strata ---
         strata_arr = None
@@ -273,6 +357,84 @@ class SurveyDesign:
             lonely_psu=self.lonely_psu,
         )
 
+    def subpopulation(
+        self,
+        data: pd.DataFrame,
+        mask,
+    ) -> Tuple["SurveyDesign", pd.DataFrame]:
+        """Create a subpopulation design by zeroing out excluded observations.
+
+        Preserves the full survey design structure (strata, PSU) while setting
+        weights to zero for observations outside the subpopulation.  This is
+        the correct approach for subpopulation analysis — unlike naive
+        subsetting, it retains design information for variance estimation.
+
+        Parameters
+        ----------
+        mask : array-like of bool, str, or callable
+            Defines the subpopulation:
+            - bool array/Series of length ``len(data)`` — True = included
+            - str — column name in ``data`` containing boolean values
+            - callable — applied to ``data``, must return bool array
+
+        Returns
+        -------
+        (SurveyDesign, pd.DataFrame)
+            A new SurveyDesign pointing to a ``_subpop_weight`` column in the
+            returned DataFrame copy.  The pair should be used together: pass
+            the returned DataFrame to ``fit()`` with the returned SurveyDesign.
+        """
+        # Resolve mask to boolean array
+        if callable(mask):
+            mask_arr = np.asarray(mask(data), dtype=bool)
+        elif isinstance(mask, str):
+            if mask not in data.columns:
+                raise ValueError(f"Mask column '{mask}' not found in data")
+            mask_arr = np.asarray(data[mask].values, dtype=bool)
+        else:
+            mask_arr = np.asarray(mask, dtype=bool)
+
+        if len(mask_arr) != len(data):
+            raise ValueError(
+                f"Mask length ({len(mask_arr)}) does not match data "
+                f"length ({len(data)})"
+            )
+
+        if not np.any(mask_arr):
+            raise ValueError(
+                "Subpopulation mask excludes all observations. "
+                "At least one observation must be included."
+            )
+
+        # Build subpopulation weights
+        if self.weights is not None:
+            if self.weights not in data.columns:
+                raise ValueError(
+                    f"Weight column '{self.weights}' not found in data"
+                )
+            base_weights = data[self.weights].values.astype(np.float64)
+        else:
+            base_weights = np.ones(len(data), dtype=np.float64)
+
+        subpop_weights = np.where(mask_arr, base_weights, 0.0)
+
+        # Create data copy with synthetic weight column
+        data_out = data.copy()
+        data_out["_subpop_weight"] = subpop_weights
+
+        # Return new SurveyDesign using the synthetic column
+        new_design = SurveyDesign(
+            weights="_subpop_weight",
+            strata=self.strata,
+            psu=self.psu,
+            fpc=self.fpc,
+            weight_type=self.weight_type,
+            nest=self.nest,
+            lonely_psu=self.lonely_psu,
+        )
+
+        return new_design, data_out
+
 
 @dataclass
 class ResolvedSurveyDesign:
@@ -290,10 +452,21 @@ class ResolvedSurveyDesign:
     n_strata: int
     n_psu: int
     lonely_psu: str
+    replicate_weights: Optional[np.ndarray] = None  # (n, R) array
+    replicate_method: Optional[str] = None
+    fay_rho: float = 0.0
+    n_replicates: int = 0
+
+    @property
+    def uses_replicate_variance(self) -> bool:
+        """Whether replicate-based variance should be used instead of TSL."""
+        return self.replicate_method is not None
 
     @property
     def df_survey(self) -> Optional[int]:
-        """Survey degrees of freedom: n_PSU - n_strata."""
+        """Survey degrees of freedom: n_PSU - n_strata, or R-1 for replicates."""
+        if self.uses_replicate_variance:
+            return self.n_replicates - 1 if self.n_replicates > 1 else None
         if self.psu is not None and self.n_psu > 0:
             if self.strata is not None and self.n_strata > 0:
                 return self.n_psu - self.n_strata
@@ -343,6 +516,9 @@ class SurveyMetadata:
     n_psu: Optional[int] = None
     weight_range: Tuple[float, float] = field(default=(0.0, 0.0))
     df_survey: Optional[int] = None
+    replicate_method: Optional[str] = None
+    n_replicates: Optional[int] = None
+    deff_diagnostics: Optional["DEFFDiagnostics"] = None
 
 
 def compute_survey_metadata(
@@ -378,6 +554,10 @@ def compute_survey_metadata(
         n_psu = len(resolved.weights)
     df_survey = resolved.df_survey
 
+    # Replicate info
+    rep_method = resolved.replicate_method if resolved.uses_replicate_variance else None
+    n_rep = resolved.n_replicates if resolved.uses_replicate_variance else None
+
     return SurveyMetadata(
         weight_type=resolved.weight_type,
         effective_n=effective_n,
@@ -387,6 +567,98 @@ def compute_survey_metadata(
         n_psu=n_psu,
         weight_range=(float(np.min(raw_weights)), float(np.max(raw_weights))),
         df_survey=df_survey,
+        replicate_method=rep_method,
+        n_replicates=n_rep,
+    )
+
+
+@dataclass
+class DEFFDiagnostics:
+    """Per-coefficient design effect diagnostics.
+
+    Compares survey-design variance to simple random sampling (SRS)
+    variance for each coefficient, giving the variance inflation factor
+    due to the survey design (clustering, stratification, weighting).
+
+    Attributes
+    ----------
+    deff : np.ndarray
+        Per-coefficient DEFF: survey_var / srs_var. Shape (k,).
+    effective_n : np.ndarray
+        Effective sample size per coefficient: n / DEFF. Shape (k,).
+    srs_se : np.ndarray
+        SRS (HC1) standard errors. Shape (k,).
+    survey_se : np.ndarray
+        Survey standard errors. Shape (k,).
+    coefficient_names : list of str or None
+        Names for display.
+    """
+
+    deff: np.ndarray
+    effective_n: np.ndarray
+    srs_se: np.ndarray
+    survey_se: np.ndarray
+    coefficient_names: Optional[List[str]] = None
+
+
+def compute_deff_diagnostics(
+    X: np.ndarray,
+    residuals: np.ndarray,
+    survey_vcov: np.ndarray,
+    weights: np.ndarray,
+    weight_type: str = "pweight",
+    coefficient_names: Optional[List[str]] = None,
+) -> DEFFDiagnostics:
+    """Compute per-coefficient design effects.
+
+    Compares the survey variance-covariance matrix to a simple random
+    sampling (SRS) baseline (HC1 sandwich, ignoring strata/PSU/FPC).
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Design matrix of shape (n, k).
+    residuals : np.ndarray
+        Residuals from the WLS fit, shape (n,).
+    survey_vcov : np.ndarray
+        Survey variance-covariance matrix, shape (k, k).
+    weights : np.ndarray
+        Observation weights (normalized), shape (n,).
+    weight_type : str, default "pweight"
+        Weight type for SRS computation.
+    coefficient_names : list of str, optional
+        Names for display.
+
+    Returns
+    -------
+    DEFFDiagnostics
+    """
+    from diff_diff.linalg import compute_robust_vcov
+
+    n = X.shape[0]
+
+    # SRS baseline: HC1 weighted sandwich ignoring design structure
+    srs_vcov = compute_robust_vcov(
+        X, residuals, cluster_ids=None, weights=weights, weight_type=weight_type,
+    )
+
+    survey_var = np.diag(survey_vcov)
+    srs_var = np.diag(srs_vcov)
+
+    # DEFF = survey_var / srs_var
+    with np.errstate(divide="ignore", invalid="ignore"):
+        deff = np.where(srs_var > 0, survey_var / srs_var, np.nan)
+        eff_n = np.where(deff > 0, n / deff, np.nan)
+
+    survey_se = np.sqrt(np.maximum(survey_var, 0.0))
+    srs_se = np.sqrt(np.maximum(srs_var, 0.0))
+
+    return DEFFDiagnostics(
+        deff=deff,
+        effective_n=eff_n,
+        srs_se=srs_se,
+        survey_se=survey_se,
+        coefficient_names=coefficient_names,
     )
 
 
@@ -831,6 +1103,153 @@ def compute_survey_if_variance(
         return np.nan
 
     return meat_scalar
+
+
+def _replicate_variance_factor(
+    method: str, n_replicates: int, fay_rho: float,
+) -> float:
+    """Compute the scalar variance factor for replicate methods."""
+    if method == "BRR":
+        return 1.0 / n_replicates
+    elif method == "Fay":
+        return 1.0 / (n_replicates * (1.0 - fay_rho) ** 2)
+    elif method == "JK1":
+        return (n_replicates - 1.0) / n_replicates
+    # JKn handled separately (per-stratum factors)
+    raise ValueError(f"Unknown replicate method: {method}")
+
+
+def compute_replicate_vcov(
+    X: np.ndarray,
+    y: np.ndarray,
+    full_sample_coef: np.ndarray,
+    resolved: "ResolvedSurveyDesign",
+    weight_type: str = "pweight",
+) -> np.ndarray:
+    """Compute replicate-weight variance-covariance matrix.
+
+    Re-runs WLS for each replicate weight column and computes variance
+    from the distribution of replicate coefficient vectors.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Design matrix of shape (n, k).
+    y : np.ndarray
+        Response vector of shape (n,).
+    full_sample_coef : np.ndarray
+        Coefficients from the full-sample fit, shape (k,).
+    resolved : ResolvedSurveyDesign
+        Must have ``uses_replicate_variance == True``.
+    weight_type : str, default "pweight"
+        Weight type for per-replicate WLS.
+
+    Returns
+    -------
+    np.ndarray
+        Variance-covariance matrix of shape (k, k).
+    """
+    from diff_diff.linalg import solve_ols
+
+    rep_weights = resolved.replicate_weights
+    method = resolved.replicate_method
+    R = resolved.n_replicates
+    k = X.shape[1]
+
+    # Collect replicate coefficient vectors
+    coef_reps = np.full((R, k), np.nan)
+    for r in range(R):
+        w_r = rep_weights[:, r]
+        # Skip replicates where all weights are zero
+        if np.sum(w_r) == 0:
+            continue
+        try:
+            coef_r, _, _ = solve_ols(
+                X, y,
+                weights=w_r,
+                weight_type=weight_type,
+                rank_deficient_action="silent",
+                return_vcov=False,
+                check_finite=False,
+            )
+            coef_reps[r] = coef_r
+        except Exception:
+            pass  # NaN row for singular replicate solve
+
+    # Remove replicates with NaN coefficients
+    valid = np.all(np.isfinite(coef_reps), axis=1)
+    if not np.any(valid):
+        return np.full((k, k), np.nan)
+    coef_valid = coef_reps[valid]
+    c = full_sample_coef
+
+    # Compute variance by method
+    diffs = coef_valid - c[np.newaxis, :]
+    outer_sum = diffs.T @ diffs  # (k, k)
+
+    if method in ("BRR", "Fay", "JK1"):
+        factor = _replicate_variance_factor(method, int(np.sum(valid)), resolved.fay_rho)
+        return factor * outer_sum
+    elif method == "JKn":
+        # JKn: V = sum_h ((n_h-1)/n_h) * sum_{r in h} (c_r - c)(c_r - c)^T
+        # Without replicate_strata, fall back to JK1 formula
+        factor = _replicate_variance_factor("JK1", int(np.sum(valid)), 0.0)
+        return factor * outer_sum
+    else:
+        raise ValueError(f"Unknown replicate method: {method}")
+
+
+def compute_replicate_if_variance(
+    psi: np.ndarray,
+    resolved: "ResolvedSurveyDesign",
+) -> float:
+    """Compute replicate-based variance for influence-function estimators.
+
+    Instead of re-running the full estimator, reweights the influence
+    function under each replicate weight set.
+
+    Parameters
+    ----------
+    psi : np.ndarray
+        Per-unit influence function values, shape (n,).
+    resolved : ResolvedSurveyDesign
+        Must have ``uses_replicate_variance == True``.
+
+    Returns
+    -------
+    float
+        Replicate-based variance estimate.
+    """
+    psi = np.asarray(psi, dtype=np.float64).ravel()
+    rep_weights = resolved.replicate_weights
+    method = resolved.replicate_method
+    R = resolved.n_replicates
+
+    full_weights = resolved.weights
+    theta_full = np.sum(full_weights * psi) / np.sum(full_weights)
+
+    # Compute replicate estimates
+    theta_reps = np.full(R, np.nan)
+    for r in range(R):
+        w_r = rep_weights[:, r]
+        sw = np.sum(w_r)
+        if sw > 0:
+            theta_reps[r] = np.sum(w_r * psi) / sw
+
+    valid = np.isfinite(theta_reps)
+    if not np.any(valid):
+        return np.nan
+    diffs = theta_reps[valid] - theta_full
+    ss = float(np.sum(diffs**2))
+
+    if method in ("BRR", "Fay", "JK1"):
+        factor = _replicate_variance_factor(method, int(np.sum(valid)), resolved.fay_rho)
+        return factor * ss
+    elif method == "JKn":
+        factor = _replicate_variance_factor("JK1", int(np.sum(valid)), 0.0)
+        return factor * ss
+    else:
+        raise ValueError(f"Unknown replicate method: {method}")
 
 
 def aggregate_to_psu(

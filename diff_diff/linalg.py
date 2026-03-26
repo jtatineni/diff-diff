@@ -1721,20 +1721,48 @@ class LinearRegression:
 
         # Compute survey vcov if applicable
         if _use_survey_vcov:
-            from diff_diff.survey import compute_survey_vcov
+            from diff_diff.survey import ResolvedSurveyDesign as _RSD
 
-            nan_mask = np.isnan(coefficients)
-            if np.any(nan_mask):
-                kept_cols = np.where(~nan_mask)[0]
-                if len(kept_cols) > 0:
-                    vcov_reduced = compute_survey_vcov(
-                        X[:, kept_cols], residuals, _effective_survey_design
-                    )
-                    vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+            _uses_rep = (
+                isinstance(_effective_survey_design, _RSD)
+                and _effective_survey_design.uses_replicate_variance
+            )
+
+            if _uses_rep:
+                from diff_diff.survey import compute_replicate_vcov
+
+                nan_mask = np.isnan(coefficients)
+                if np.any(nan_mask):
+                    kept_cols = np.where(~nan_mask)[0]
+                    if len(kept_cols) > 0:
+                        vcov_reduced = compute_replicate_vcov(
+                            X[:, kept_cols], y, coefficients[kept_cols],
+                            _effective_survey_design,
+                            weight_type=self.weight_type,
+                        )
+                        vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+                    else:
+                        vcov = np.full((X.shape[1], X.shape[1]), np.nan)
                 else:
-                    vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                    vcov = compute_replicate_vcov(
+                        X, y, coefficients, _effective_survey_design,
+                        weight_type=self.weight_type,
+                    )
             else:
-                vcov = compute_survey_vcov(X, residuals, _effective_survey_design)
+                from diff_diff.survey import compute_survey_vcov
+
+                nan_mask = np.isnan(coefficients)
+                if np.any(nan_mask):
+                    kept_cols = np.where(~nan_mask)[0]
+                    if len(kept_cols) > 0:
+                        vcov_reduced = compute_survey_vcov(
+                            X[:, kept_cols], residuals, _effective_survey_design
+                        )
+                        vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+                    else:
+                        vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                else:
+                    vcov = compute_survey_vcov(X, residuals, _effective_survey_design)
 
         # Store fitted attributes
         self.coefficients_ = coefficients
@@ -1765,6 +1793,33 @@ class LinearRegression:
                 self.survey_df_ = _effective_survey_design.df_survey
 
         return self
+
+    def compute_deff(self, coefficient_names=None):
+        """Compute per-coefficient design effect diagnostics.
+
+        Compares the survey vcov to an SRS (HC1) baseline.  Must be called
+        after ``fit()`` with a survey design.
+
+        Returns
+        -------
+        DEFFDiagnostics
+        """
+        self._check_fitted()
+        if self.survey_df_ is None:
+            raise ValueError(
+                "compute_deff() requires a survey design. "
+                "Fit with survey_design= first."
+            )
+        from diff_diff.survey import compute_deff_diagnostics
+
+        return compute_deff_diagnostics(
+            self._X,
+            self.residuals_,
+            self.vcov_,
+            self.weights,
+            weight_type=self.weight_type,
+            coefficient_names=coefficient_names,
+        )
 
     def _check_fitted(self) -> None:
         """Raise error if model has not been fitted."""

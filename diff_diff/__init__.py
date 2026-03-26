@@ -95,8 +95,10 @@ from diff_diff.results import (
     SyntheticDiDResults,
 )
 from diff_diff.survey import (
+    DEFFDiagnostics,
     SurveyDesign,
     SurveyMetadata,
+    compute_deff_diagnostics,
 )
 from diff_diff.staggered import (
     CallawaySantAnna,

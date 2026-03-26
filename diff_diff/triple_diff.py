@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.linalg import solve_logit, solve_ols
-from diff_diff.results import _get_significance_stars
+from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.utils import safe_inference
 
 _MIN_CELL_SIZE = 10
@@ -152,24 +152,7 @@ class TripleDifferenceResults:
         # Add survey design info
         if self.survey_metadata is not None:
             sm = self.survey_metadata
-            lines.extend(
-                [
-                    "",
-                    "-" * 75,
-                    "Survey Design".center(75),
-                    "-" * 75,
-                    f"{'Weight type:':<30} {sm.weight_type:>15}",
-                ]
-            )
-            if sm.n_strata is not None:
-                lines.append(f"{'Strata:':<30} {sm.n_strata:>15}")
-            if sm.n_psu is not None:
-                lines.append(f"{'PSU/Cluster:':<30} {sm.n_psu:>15}")
-            lines.append(f"{'Effective sample size:':<30} {sm.effective_n:>15.1f}")
-            lines.append(f"{'Design effect (DEFF):':<30} {sm.design_effect:>15.2f}")
-            if sm.df_survey is not None:
-                lines.append(f"{'Survey d.f.:':<30} {sm.df_survey:>15}")
-            lines.append("-" * 75)
+            lines.extend(_format_survey_block(sm, 75))
 
         if self.inference_method != "analytical":
             lines.append(f"{'Inference method:':<30} {self.inference_method:>15}")

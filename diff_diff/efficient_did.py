@@ -1577,6 +1577,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             n_units = int(np.sum(row_finite))
             if cl_idx is not None:
                 cl_idx = cl_idx[row_finite]
+                # Recompute effective cluster count and remap to contiguous
+                # indices — entire clusters may have been dropped by filtering
+                unique_cl, cl_idx = np.unique(cl_idx, return_inverse=True)
+                n_cl = len(unique_cl)
 
         # Compute full covariance matrices
         if cl_idx is not None and n_cl is not None:

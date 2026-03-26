@@ -390,6 +390,7 @@ class ContinuousDiD:
                 gt_bootstrap_info=gt_bootstrap_info,
                 unit_survey_weights=precomp.get("unit_survey_weights"),
                 unit_cohorts=precomp["unit_cohorts"],
+                anticipation=self.anticipation,
             )
 
         _survey_df = None  # Set by analytical branch when survey is active
@@ -1052,12 +1053,15 @@ class ContinuousDiD:
         gt_bootstrap_info: Dict[Tuple, Dict] = None,
         unit_survey_weights: Optional[np.ndarray] = None,
         unit_cohorts: Optional[np.ndarray] = None,
+        anticipation: int = 0,
     ) -> Dict[int, Dict[str, Any]]:
         """Aggregate binarized ATT_glob by relative period."""
         effects_by_e: Dict[int, List[Tuple[float, float, Tuple]]] = {}
 
         for (g, t), r in gt_results.items():
             e = t - g
+            if anticipation > 0 and e < -anticipation:
+                continue
             if e not in effects_by_e:
                 effects_by_e[e] = []
             # Compute weight for this (g,t) cell
@@ -1374,6 +1378,8 @@ class ContinuousDiD:
             for gt, r in gt_results.items():
                 g_val, t_val = gt
                 e = t_val - g_val
+                if self.anticipation > 0 and e < -self.anticipation:
+                    continue
                 if unit_sw is not None:
                     g_mask = unit_cohorts == g_val
                     cell_mass = float(np.sum(unit_sw[g_mask]))
@@ -1383,6 +1389,8 @@ class ContinuousDiD:
             for gt, r in gt_results.items():
                 g_val, t_val = gt
                 e = t_val - g_val
+                if self.anticipation > 0 and e < -self.anticipation:
+                    continue
                 if unit_sw is not None:
                     g_mask = unit_cohorts == g_val
                     cell_mass = float(np.sum(unit_sw[g_mask]))

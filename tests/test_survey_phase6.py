@@ -1,0 +1,549 @@
+"""Tests for Phase 6 survey support: Subpopulation, DEFF, Replicate Weights."""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from diff_diff import (
+    DEFFDiagnostics,
+    DifferenceInDifferences,
+    SurveyDesign,
+    compute_deff_diagnostics,
+)
+
+
+# =============================================================================
+# Shared Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def basic_did_data():
+    """Simple 2x2 DiD panel with survey design columns."""
+    np.random.seed(42)
+    n_units = 80
+    n_periods = 4
+    rows = []
+    for unit in range(n_units):
+        treated = unit < 40
+        ft = 3 if treated else 0
+        stratum = unit // 20  # 4 strata
+        psu = unit // 10  # 8 PSUs
+        wt = 1.0 + 0.5 * (unit % 5)
+
+        for t in range(1, n_periods + 1):
+            y = 10.0 + unit * 0.05 + t * 0.3
+            if treated and t >= 3:
+                y += 2.0
+            y += np.random.normal(0, 0.5)
+            rows.append({
+                "unit": unit, "time": t, "first_treat": ft,
+                "outcome": y, "stratum": stratum, "psu": psu,
+                "weight": wt, "fpc": 200.0,
+            })
+    return pd.DataFrame(rows)
+
+
+# =============================================================================
+# Subpopulation Analysis
+# =============================================================================
+
+
+class TestSubpopulationAnalysis:
+    """Tests for SurveyDesign.subpopulation()."""
+
+    def test_basic_subpopulation(self, basic_did_data):
+        """Subpopulation returns a new SurveyDesign and DataFrame."""
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        mask = basic_did_data["unit"] < 60  # Exclude last 20 units
+        new_sd, new_data = sd.subpopulation(basic_did_data, mask)
+
+        assert new_sd.weights == "_subpop_weight"
+        assert new_sd.strata == "stratum"
+        assert new_sd.psu == "psu"
+        assert "_subpop_weight" in new_data.columns
+
+        # Excluded obs have zero weight
+        excluded = new_data[~mask.values]
+        assert (excluded["_subpop_weight"] == 0.0).all()
+
+        # Included obs have original weights
+        included = new_data[mask.values]
+        np.testing.assert_array_equal(
+            included["_subpop_weight"].values,
+            basic_did_data.loc[mask.values, "weight"].values,
+        )
+
+    def test_subpopulation_preserves_design_structure(self, basic_did_data):
+        """PSU/strata structure is preserved even when some PSUs are zeroed."""
+        sd = SurveyDesign(
+            weights="weight", strata="stratum", psu="psu", nest=True,
+        )
+        # Exclude all units in stratum 0
+        mask = basic_did_data["stratum"] != 0
+        new_sd, new_data = sd.subpopulation(basic_did_data, mask)
+
+        # Should resolve without error — stratum 0 PSUs still exist in design
+        resolved = new_sd.resolve(new_data)
+        assert resolved.n_strata == 4  # All strata still present
+        assert resolved.n_psu == 8  # All PSUs still present
+
+    def test_subpopulation_with_did(self, basic_did_data):
+        """Subpopulation works end-to-end with DifferenceInDifferences."""
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        mask = basic_did_data["unit"] < 60
+        new_sd, new_data = sd.subpopulation(basic_did_data, mask)
+
+        # Add treated/post columns for the estimator
+        new_data["treated"] = (new_data["first_treat"] > 0).astype(int)
+        new_data["post"] = (new_data["time"] >= 3).astype(int)
+        est = DifferenceInDifferences()
+        result = est.fit(
+            new_data, outcome="outcome", treatment="treated", time="post",
+            survey_design=new_sd,
+        )
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.survey_metadata is not None
+
+    def test_subpopulation_preserves_more_psus_than_subset(self, basic_did_data):
+        """Subpopulation retains all PSUs in the design; subset drops them."""
+        sd = SurveyDesign(
+            weights="weight", strata="stratum", psu="psu", nest=True,
+        )
+        mask = basic_did_data["unit"] < 60
+
+        # Subpopulation: preserves full design
+        new_sd, new_data = sd.subpopulation(basic_did_data, mask)
+        resolved_subpop = new_sd.resolve(new_data)
+
+        # Naive subset: loses PSUs in excluded observations
+        subset = basic_did_data[mask.values].copy()
+        resolved_subset = sd.resolve(subset)
+
+        # Subpopulation preserves the full PSU count
+        assert resolved_subpop.n_psu >= resolved_subset.n_psu
+
+    def test_subpopulation_mask_as_column_name(self, basic_did_data):
+        """Mask can be a column name string."""
+        sd = SurveyDesign(weights="weight")
+        data = basic_did_data.copy()
+        data["include"] = data["unit"] < 60
+        new_sd, new_data = sd.subpopulation(data, "include")
+        assert (new_data.loc[~data["include"], "_subpop_weight"] == 0.0).all()
+
+    def test_subpopulation_mask_as_callable(self, basic_did_data):
+        """Mask can be a callable."""
+        sd = SurveyDesign(weights="weight")
+        new_sd, new_data = sd.subpopulation(
+            basic_did_data, lambda df: df["unit"] < 60,
+        )
+        excluded = new_data[basic_did_data["unit"] >= 60]
+        assert (excluded["_subpop_weight"] == 0.0).all()
+
+    def test_subpopulation_no_weights_uses_uniform(self, basic_did_data):
+        """When SurveyDesign has no weights, subpopulation uses 1.0."""
+        sd = SurveyDesign(strata="stratum")
+        mask = basic_did_data["unit"] < 60
+        new_sd, new_data = sd.subpopulation(basic_did_data, mask)
+
+        included = new_data[mask.values]
+        assert (included["_subpop_weight"] == 1.0).all()
+
+    def test_subpopulation_all_excluded_raises(self, basic_did_data):
+        """Excluding all obs should raise ValueError."""
+        sd = SurveyDesign(weights="weight")
+        mask = np.zeros(len(basic_did_data), dtype=bool)
+        with pytest.raises(ValueError, match="excludes all"):
+            sd.subpopulation(basic_did_data, mask)
+
+    def test_subpopulation_none_excluded_identity(self, basic_did_data):
+        """Including all obs should return weights unchanged."""
+        sd = SurveyDesign(weights="weight")
+        mask = np.ones(len(basic_did_data), dtype=bool)
+        new_sd, new_data = sd.subpopulation(basic_did_data, mask)
+        np.testing.assert_array_equal(
+            new_data["_subpop_weight"].values,
+            basic_did_data["weight"].values,
+        )
+
+    def test_subpopulation_mask_length_mismatch_raises(self, basic_did_data):
+        """Mask length must match data length."""
+        sd = SurveyDesign(weights="weight")
+        mask = np.ones(10, dtype=bool)
+        with pytest.raises(ValueError, match="length"):
+            sd.subpopulation(basic_did_data, mask)
+
+    def test_zero_weights_allowed_in_resolve(self):
+        """resolve() should accept zero weights (no longer strictly positive)."""
+        data = pd.DataFrame({
+            "w": [1.0, 2.0, 0.0, 1.5],
+            "y": [1, 2, 3, 4],
+        })
+        sd = SurveyDesign(weights="w")
+        resolved = sd.resolve(data)
+        assert resolved.weights[2] == 0.0  # Zero preserved after normalization
+
+    def test_negative_weights_rejected(self):
+        """Negative weights should still be rejected."""
+        data = pd.DataFrame({"w": [1.0, -1.0, 2.0], "y": [1, 2, 3]})
+        sd = SurveyDesign(weights="w")
+        with pytest.raises(ValueError, match="non-negative"):
+            sd.resolve(data)
+
+
+# =============================================================================
+# DEFF Diagnostics
+# =============================================================================
+
+
+class TestDEFFDiagnostics:
+    """Tests for per-coefficient design effect diagnostics."""
+
+    @staticmethod
+    def _fit_lr_with_survey(data, sd):
+        """Fit a LinearRegression with survey design for testing DEFF."""
+        from diff_diff.linalg import LinearRegression
+        from diff_diff.survey import _resolve_survey_for_fit
+
+        resolved, sw, swt, sm = _resolve_survey_for_fit(sd, data, "analytical")
+        y = data["outcome"].values
+        X = np.column_stack([
+            np.ones(len(data)),
+            data["treated"].values,
+            data["post"].values,
+            (data["treated"] * data["post"]).values,
+        ])
+        reg = LinearRegression(
+            include_intercept=False, weights=sw,
+            weight_type=swt, survey_design=resolved,
+        )
+        reg.fit(X, y)
+        return reg
+
+    def test_uniform_weights_deff_near_one(self, basic_did_data):
+        """With uniform weights and no clustering, DEFF should be ~1."""
+        data = basic_did_data.copy()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        data["post"] = (data["time"] >= 3).astype(int)
+        data["uniform_wt"] = 1.0
+
+        sd = SurveyDesign(weights="uniform_wt")
+        reg = self._fit_lr_with_survey(data, sd)
+        deff = reg.compute_deff()
+        assert isinstance(deff, DEFFDiagnostics)
+        # With uniform weights, DEFF should be close to 1
+        for d in deff.deff:
+            if np.isfinite(d):
+                assert d == pytest.approx(1.0, abs=0.15)
+
+    def test_clustered_design_deff_gt_one(self, basic_did_data):
+        """With clustered design, DEFF should be > 1 for at least some coefs."""
+        data = basic_did_data.copy()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        data["post"] = (data["time"] >= 3).astype(int)
+
+        sd = SurveyDesign(
+            weights="weight", strata="stratum", psu="psu", nest=True,
+        )
+        reg = self._fit_lr_with_survey(data, sd)
+        deff = reg.compute_deff()
+        # At least one coefficient should have DEFF > 1 (design effect)
+        assert np.any(deff.deff[np.isfinite(deff.deff)] > 1.0)
+
+    def test_deff_srs_se_matches_robust_vcov(self, basic_did_data):
+        """SRS SE in DEFF diagnostics should match compute_robust_vcov."""
+        from diff_diff.linalg import compute_robust_vcov
+
+        data = basic_did_data.copy()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        data["post"] = (data["time"] >= 3).astype(int)
+
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        reg = self._fit_lr_with_survey(data, sd)
+        deff = reg.compute_deff()
+
+        # Manually compute SRS SE
+        srs_vcov = compute_robust_vcov(
+            reg._X, reg.residuals_,
+            cluster_ids=None, weights=reg.weights,
+            weight_type=reg.weight_type,
+        )
+        expected_srs_se = np.sqrt(np.diag(srs_vcov))
+        np.testing.assert_allclose(deff.srs_se, expected_srs_se, rtol=1e-10)
+
+    def test_standalone_compute_deff_diagnostics(self, basic_did_data):
+        """compute_deff_diagnostics() works as a standalone function."""
+        data = basic_did_data.copy()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        data["post"] = (data["time"] >= 3).astype(int)
+
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        reg = self._fit_lr_with_survey(data, sd)
+        deff = compute_deff_diagnostics(
+            reg._X, reg.residuals_, reg.vcov_,
+            reg.weights, weight_type=reg.weight_type,
+            coefficient_names=["intercept", "treated", "post", "treated:post"],
+        )
+        assert deff.coefficient_names is not None
+        assert len(deff.coefficient_names) == 4
+        assert len(deff.deff) == 4
+
+    def test_deff_effective_n(self, basic_did_data):
+        """effective_n should be n / DEFF."""
+        data = basic_did_data.copy()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        data["post"] = (data["time"] >= 3).astype(int)
+
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        reg = self._fit_lr_with_survey(data, sd)
+        deff = reg.compute_deff()
+        n = reg.n_obs_
+        for i in range(len(deff.deff)):
+            if np.isfinite(deff.deff[i]) and deff.deff[i] > 0:
+                assert deff.effective_n[i] == pytest.approx(
+                    n / deff.deff[i], rel=1e-10
+                )
+
+    def test_compute_deff_no_survey_raises(self, basic_did_data):
+        """compute_deff() without survey should raise."""
+        from diff_diff.linalg import LinearRegression
+
+        data = basic_did_data.copy()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        data["post"] = (data["time"] >= 3).astype(int)
+
+        y = data["outcome"].values
+        X = np.column_stack([np.ones(len(data)), data["treated"].values])
+        reg = LinearRegression(include_intercept=False)
+        reg.fit(X, y)
+        with pytest.raises(ValueError, match="survey design"):
+            reg.compute_deff()
+
+
+# =============================================================================
+# Replicate Weight Variance
+# =============================================================================
+
+
+@pytest.fixture
+def replicate_data():
+    """Data with full-sample + replicate weight columns for testing."""
+    np.random.seed(123)
+    n = 200
+    k = 20  # number of replicates
+
+    # Simple regression: y = 1 + 2*x + eps
+    x = np.random.randn(n)
+    eps = np.random.randn(n) * 0.5
+    y = 1.0 + 2.0 * x + eps
+
+    # Full-sample weights (non-uniform)
+    w = 1.0 + np.random.exponential(0.5, n)
+
+    data = pd.DataFrame({"x": x, "y": y, "weight": w})
+
+    # Generate JK1 replicate weights (delete-1 jackknife on PSU clusters)
+    # Each replicate drops one cluster and rescales remaining weights
+    cluster_size = n // k
+    for r in range(k):
+        w_r = w.copy()
+        start = r * cluster_size
+        end = min((r + 1) * cluster_size, n)
+        w_r[start:end] = 0.0
+        # Rescale remaining: multiply by k/(k-1)
+        w_r[w_r > 0] *= k / (k - 1)
+        data[f"rep_{r}"] = w_r
+
+    return data, [f"rep_{r}" for r in range(k)]
+
+
+class TestReplicateWeightVariance:
+    """Tests for replicate weight variance estimation."""
+
+    def test_brr_validation(self):
+        """BRR validation: method + weights required together."""
+        with pytest.raises(ValueError, match="replicate_method must be provided"):
+            SurveyDesign(weights="w", replicate_weights=["r1", "r2"])
+        with pytest.raises(ValueError, match="replicate_weights must be provided"):
+            SurveyDesign(weights="w", replicate_method="BRR")
+
+    def test_fay_rho_validation(self):
+        """Fay requires rho in (0, 1)."""
+        with pytest.raises(ValueError, match="fay_rho"):
+            SurveyDesign(
+                weights="w", replicate_weights=["r1", "r2"],
+                replicate_method="Fay", fay_rho=0.0,
+            )
+        with pytest.raises(ValueError, match="fay_rho"):
+            SurveyDesign(
+                weights="w", replicate_weights=["r1", "r2"],
+                replicate_method="BRR", fay_rho=0.5,
+            )
+
+    def test_replicate_strata_mutual_exclusion(self):
+        """Replicate weights cannot be combined with strata/psu/fpc."""
+        with pytest.raises(ValueError, match="cannot be combined"):
+            SurveyDesign(
+                weights="w", strata="s",
+                replicate_weights=["r1", "r2"], replicate_method="BRR",
+            )
+
+    def test_replicate_requires_weights(self):
+        """Full-sample weights required alongside replicates."""
+        with pytest.raises(ValueError, match="Full-sample weights"):
+            SurveyDesign(
+                replicate_weights=["r1", "r2"], replicate_method="BRR",
+            )
+
+    def test_jk1_resolve(self, replicate_data):
+        """JK1 replicates resolve correctly."""
+        data, rep_cols = replicate_data
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        resolved = sd.resolve(data)
+        assert resolved.uses_replicate_variance
+        assert resolved.n_replicates == len(rep_cols)
+        assert resolved.replicate_weights.shape == (len(data), len(rep_cols))
+        assert resolved.strata is None  # Short-circuited
+        assert resolved.df_survey == len(rep_cols) - 1
+
+    def test_jk1_vcov_finite(self, replicate_data):
+        """JK1 replicate vcov produces finite results."""
+        from diff_diff.linalg import LinearRegression
+
+        data, rep_cols = replicate_data
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        resolved = sd.resolve(data)
+        y = data["y"].values
+        X = np.column_stack([np.ones(len(data)), data["x"].values])
+
+        reg = LinearRegression(
+            include_intercept=False, weights=resolved.weights,
+            weight_type="pweight", survey_design=resolved,
+        )
+        reg.fit(X, y)
+
+        assert np.all(np.isfinite(reg.coefficients_))
+        assert np.all(np.isfinite(np.diag(reg.vcov_)))
+        # SE should be positive
+        se = np.sqrt(np.diag(reg.vcov_))
+        assert np.all(se > 0)
+
+    def test_brr_vcov(self, replicate_data):
+        """BRR uses 1/R factor."""
+        from diff_diff.survey import compute_replicate_vcov
+
+        data, rep_cols = replicate_data
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="BRR",
+        )
+        resolved = sd.resolve(data)
+        y = data["y"].values
+        X = np.column_stack([np.ones(len(data)), data["x"].values])
+
+        from diff_diff.linalg import solve_ols
+        coef, _, _ = solve_ols(
+            X, y, weights=resolved.weights, weight_type="pweight",
+        )
+
+        vcov = compute_replicate_vcov(X, y, coef, resolved)
+        assert np.all(np.isfinite(np.diag(vcov)))
+
+    def test_fay_inflates_over_brr(self, replicate_data):
+        """Fay's BRR with rho > 0 produces larger variance than BRR."""
+        from diff_diff.survey import compute_replicate_vcov
+        from diff_diff.linalg import solve_ols
+
+        data, rep_cols = replicate_data
+        y = data["y"].values
+        X = np.column_stack([np.ones(len(data)), data["x"].values])
+
+        sd_brr = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="BRR",
+        )
+        resolved_brr = sd_brr.resolve(data)
+        coef, _, _ = solve_ols(X, y, weights=resolved_brr.weights)
+        vcov_brr = compute_replicate_vcov(X, y, coef, resolved_brr)
+
+        sd_fay = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="Fay", fay_rho=0.5,
+        )
+        resolved_fay = sd_fay.resolve(data)
+        vcov_fay = compute_replicate_vcov(X, y, coef, resolved_fay)
+
+        # Fay variance = BRR variance / (1-rho)^2 > BRR variance
+        assert np.all(np.diag(vcov_fay) > np.diag(vcov_brr))
+
+    def test_replicate_metadata(self, replicate_data):
+        """SurveyMetadata should include replicate info."""
+        from diff_diff.survey import compute_survey_metadata
+
+        data, rep_cols = replicate_data
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        resolved = sd.resolve(data)
+        sm = compute_survey_metadata(resolved, data["weight"].values)
+        assert sm.replicate_method == "JK1"
+        assert sm.n_replicates == len(rep_cols)
+        assert sm.df_survey == len(rep_cols) - 1
+
+    def test_replicate_with_did(self, replicate_data):
+        """Replicate weights work end-to-end with DifferenceInDifferences."""
+        data, rep_cols = replicate_data
+        # Add DiD structure
+        n = len(data)
+        data["treated"] = (np.arange(n) < n // 2).astype(int)
+        data["post"] = (np.arange(n) % 4 >= 2).astype(int)
+        data["outcome"] = data["y"] + 1.5 * data["treated"] * data["post"]
+
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        est = DifferenceInDifferences()
+        result = est.fit(
+            data, outcome="outcome", treatment="treated", time="post",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.survey_metadata is not None
+        assert result.survey_metadata.replicate_method == "JK1"
+
+    def test_replicate_if_variance(self, replicate_data):
+        """IF-based replicate variance produces finite results."""
+        from diff_diff.survey import compute_replicate_if_variance
+
+        data, rep_cols = replicate_data
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        resolved = sd.resolve(data)
+
+        # Synthetic influence function
+        psi = np.random.randn(len(data)) * 0.1
+        var = compute_replicate_if_variance(psi, resolved)
+        assert np.isfinite(var)
+        assert var >= 0
+
+    def test_min_2_replicates(self, replicate_data):
+        """Need at least 2 replicate columns."""
+        data, _ = replicate_data
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=["rep_0"],
+            replicate_method="BRR",
+        )
+        with pytest.raises(ValueError, match="At least 2"):
+            sd.resolve(data)
