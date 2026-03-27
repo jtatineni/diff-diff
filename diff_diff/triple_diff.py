@@ -478,6 +478,9 @@ class TripleDifference:
         NotImplementedError
             If survey_design is used with wild_bootstrap inference.
         """
+        # Reset replicate state from any previous fit
+        self._replicate_n_valid = None
+
         # Resolve survey design if provided
         from diff_diff.survey import (
             _inject_cluster_as_psu,
