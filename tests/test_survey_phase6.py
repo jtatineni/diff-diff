@@ -744,7 +744,20 @@ class TestReplicateWeightVariance:
             w[i] = 1.0
             X[i, 1] = 5.0
         with pytest.warns(UserWarning, match="rank-deficient"):
-            solve_logit(X, y, weights=w, rank_deficient_action="warn")
+            beta, probs = solve_logit(X, y, weights=w, rank_deficient_action="warn")
+        # Key assertion: beta must have original p+1 length (intercept + 2 covariates)
+        assert len(beta) == 3, (
+            f"Expected beta length 3 (p+1), got {len(beta)}. "
+            f"Column dropping broke the coefficient vector shape."
+        )
+
+    def test_subpopulation_string_mask_rejected(self, basic_did_data):
+        """Subpopulation mask with string values should be rejected."""
+        sd = SurveyDesign(weights="weight")
+        mask = ["yes"] * len(basic_did_data)
+        mask[0] = "no"
+        with pytest.raises(ValueError, match="string"):
+            sd.subpopulation(basic_did_data, mask)
 
     def test_replicate_if_no_divide_by_zero_warning(self):
         """compute_replicate_if_variance should not warn on zero weights."""

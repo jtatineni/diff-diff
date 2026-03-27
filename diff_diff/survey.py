@@ -432,6 +432,18 @@ class SurveyDesign:
                     "Subpopulation mask contains None/NA values. "
                     "Provide a boolean mask with no missing values."
                 )
+            # Reject string/object masks — non-empty strings coerce to True
+            # which silently defines the wrong domain
+            if any(isinstance(v, str) for v in raw_mask):
+                raise ValueError(
+                    "Subpopulation mask has object dtype with string values. "
+                    "Provide a boolean or numeric (0/1) mask, not strings."
+                )
+        if hasattr(raw_mask, 'dtype') and raw_mask.dtype.kind in ('U', 'S'):
+            raise ValueError(
+                "Subpopulation mask contains string values. "
+                "Provide a boolean or numeric (0/1) mask."
+            )
         mask_arr = raw_mask.astype(bool)
 
         if len(mask_arr) != len(data):

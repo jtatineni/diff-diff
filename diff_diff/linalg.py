@@ -1186,6 +1186,10 @@ def solve_logit(
             f"got '{rank_deficient_action}'"
         )
 
+    # Track original column count for coefficient expansion at the end
+    k_original = X_with_intercept.shape[1]
+    eff_dropped_original: list = []  # indices in original column space
+
     # Validate effective weighted sample when weights have zeros
     if weights is not None and np.any(weights == 0):
         pos_mask = weights > 0
@@ -1207,8 +1211,7 @@ def solve_logit(
                 f"{X_eff.shape[1]} parameters. Cannot identify logistic model."
             )
         # Check rank deficiency on positive-weight rows — full design may
-        # be full rank due to zero-weight padding. Use effective-sample rank
-        # result to drive column dropping (same flow as full-sample check).
+        # be full rank due to zero-weight padding.
         eff_rank_info = _detect_rank_deficiency(X_eff)
         if len(eff_rank_info[1]) > 0:
             n_dropped_eff = len(eff_rank_info[1])
@@ -1226,13 +1229,12 @@ def solve_logit(
                     UserWarning,
                     stacklevel=2,
                 )
-            # Use the effective-sample rank info for column dropping
-            # (overrides the full-sample check below which may show no deficiency)
-            _eff_rank, _eff_dropped, _eff_pivot = eff_rank_info
-            X_with_intercept = np.delete(X_with_intercept, _eff_dropped, axis=1)
+            # Drop columns and track original indices for final expansion
+            eff_dropped_original = list(eff_rank_info[1])
+            X_with_intercept = np.delete(X_with_intercept, eff_rank_info[1], axis=1)
             k = X_with_intercept.shape[1]
 
-    # Check rank deficiency once before iterating
+    # Check rank deficiency once before iterating (on possibly-shrunk matrix)
     rank_info = _detect_rank_deficiency(X_with_intercept)
     rank, dropped_cols, _ = rank_info
     if len(dropped_cols) > 0:
@@ -1328,10 +1330,20 @@ def solve_logit(
                 stacklevel=2,
             )
 
-    # Expand beta back to full size if columns were dropped
-    if len(dropped_cols) > 0:
-        beta_full = np.zeros(k)
-        beta_full[kept_cols] = beta_solve
+    # Expand beta back to original column count, accounting for columns
+    # dropped in both the effective-sample check and the full-sample check
+    if len(dropped_cols) > 0 or len(eff_dropped_original) > 0:
+        # First expand from X_solve columns back to post-eff-drop columns
+        beta_post_eff = np.zeros(k)
+        beta_post_eff[kept_cols] = beta_solve
+
+        # Then expand from post-eff-drop columns back to original columns
+        if len(eff_dropped_original) > 0:
+            beta_full = np.zeros(k_original)
+            kept_original = [i for i in range(k_original) if i not in eff_dropped_original]
+            beta_full[kept_original] = beta_post_eff
+        else:
+            beta_full = beta_post_eff
     else:
         beta_full = beta_solve
 

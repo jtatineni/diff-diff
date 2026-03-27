@@ -2021,7 +2021,14 @@ variance from the distribution of replicate estimates.
 - **Note:** JKn requires explicit `replicate_strata` (per-replicate stratum
   assignment). Auto-derivation from weight patterns is not supported.
 - **Note:** Invalid replicate solves (singular/degenerate) are dropped with
-  a warning. Variance is computed from valid replicates only.
+  a warning. Variance is computed from valid replicates only. Fewer than 2
+  valid replicates returns NaN variance.
+- **Note:** SunAbraham rejects replicate-weight designs with
+  `NotImplementedError` because the weighted within-transformation must be
+  recomputed per replicate (not yet implemented).
+- **Note:** CallawaySantAnna, ContinuousDiD, and EfficientDiD reject
+  replicate weights with `n_bootstrap > 0`. Replicate weights provide
+  analytical variance; bootstrap is a separate inference mechanism.
 
 ### DEFF Diagnostics (Phase 6)
 
