@@ -1298,6 +1298,15 @@ class ContinuousDiD:
                 stacklevel=3,
             )
 
+        # Reject replicate-weight designs for bootstrap — replicate variance
+        # is an analytical alternative to bootstrap, not compatible with it
+        if resolved_survey is not None and hasattr(resolved_survey, "uses_replicate_variance") and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "ContinuousDiD bootstrap (n_bootstrap > 0) is not supported "
+                "with replicate-weight survey designs. Replicate weights provide "
+                "analytical variance; use n_bootstrap=0 instead."
+            )
+
         rng = np.random.default_rng(self.seed)
         n_units = precomp["n_units"]
         n_grid = len(dvals)

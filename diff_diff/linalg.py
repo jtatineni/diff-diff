@@ -1851,12 +1851,46 @@ class LinearRegression:
             )
         from diff_diff.survey import compute_deff_diagnostics
 
+        # Handle rank-deficient fits: compute DEFF only on kept columns,
+        # then expand back with NaN for dropped columns
+        nan_mask = np.isnan(self.coefficients_)
+        if np.any(nan_mask):
+            kept = np.where(~nan_mask)[0]
+            if len(kept) == 0:
+                k = len(self.coefficients_)
+                return compute_deff_diagnostics(
+                    self._X, self.residuals_,
+                    np.full((k, k), np.nan), self.weights,
+                    weight_type=self.weight_type,
+                    coefficient_names=coefficient_names,
+                )
+            # Compute on kept columns only
+            X_kept = self._X[:, kept]
+            vcov_kept = self.vcov_[np.ix_(kept, kept)]
+            deff_kept = compute_deff_diagnostics(
+                X_kept, self.residuals_, vcov_kept,
+                self.weights, weight_type=self.weight_type,
+            )
+            # Expand back to full size with NaN for dropped
+            k = len(self.coefficients_)
+            full_deff = np.full(k, np.nan)
+            full_eff_n = np.full(k, np.nan)
+            full_srs_se = np.full(k, np.nan)
+            full_survey_se = np.full(k, np.nan)
+            full_deff[kept] = deff_kept.deff
+            full_eff_n[kept] = deff_kept.effective_n
+            full_srs_se[kept] = deff_kept.srs_se
+            full_survey_se[kept] = deff_kept.survey_se
+            from diff_diff.survey import DEFFDiagnostics
+            return DEFFDiagnostics(
+                deff=full_deff, effective_n=full_eff_n,
+                srs_se=full_srs_se, survey_se=full_survey_se,
+                coefficient_names=coefficient_names,
+            )
+
         return compute_deff_diagnostics(
-            self._X,
-            self.residuals_,
-            self.vcov_,
-            self.weights,
-            weight_type=self.weight_type,
+            self._X, self.residuals_, self.vcov_,
+            self.weights, weight_type=self.weight_type,
             coefficient_names=coefficient_names,
         )
 

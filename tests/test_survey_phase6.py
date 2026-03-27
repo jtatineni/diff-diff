@@ -861,3 +861,61 @@ class TestEstimatorReplicateWeights:
         excluded = new_data[~mask.values]
         for col in rep_cols:
             assert (excluded[col] == 0.0).all()
+
+    def test_continuous_did_replicate_bootstrap_rejected(self):
+        """ContinuousDiD should reject replicate weights + n_bootstrap > 0."""
+        from diff_diff import ContinuousDiD
+
+        data, rep_cols = self._make_staggered_replicate_data()
+        data["dose"] = np.where(data["first_treat"] > 0, 1.0 + 0.5 * data["unit"] % 3, 0.0)
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        with pytest.raises(NotImplementedError, match="not supported"):
+            ContinuousDiD(n_bootstrap=30, seed=42).fit(
+                data, "outcome", "unit", "time", "first_treat", "dose",
+                survey_design=sd,
+            )
+
+    def test_triple_diff_replicate_ipw(self):
+        """TripleDifference IPW with replicate weights uses raw IF."""
+        from diff_diff import TripleDifference
+
+        np.random.seed(42)
+        n = 120
+        n_rep = 10
+        d1 = np.repeat([0, 1], n // 2)
+        d2 = np.tile([0, 1], n // 2)
+        post = np.random.choice([0, 1], n)
+        y = 1.0 + 0.5 * d1 + 0.3 * d2 + 2.0 * d1 * d2 * post + np.random.randn(n) * 0.5
+        w = 1.0 + np.random.exponential(0.3, n)
+
+        data = pd.DataFrame({
+            "y": y, "d1": d1, "d2": d2, "post": post, "weight": w,
+        })
+        # Build JK1 replicates
+        cluster_size = n // n_rep
+        rep_cols = []
+        for r in range(n_rep):
+            w_r = w.copy()
+            start = r * cluster_size
+            end = min((r + 1) * cluster_size, n)
+            w_r[start:end] = 0.0
+            w_r[w_r > 0] *= n_rep / (n_rep - 1)
+            col = f"rep_{r}"
+            data[col] = w_r
+            rep_cols.append(col)
+
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        # Regression method should work
+        result = TripleDifference(estimation_method="reg").fit(
+            data, outcome="y", group="d1", partition="d2",
+            time="post", survey_design=sd,
+        )
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.survey_metadata is not None
