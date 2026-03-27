@@ -1659,6 +1659,9 @@ class LinearRegression:
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
 
+        # Reset replicate df from any previous fit
+        self._replicate_df = None
+
         # Add intercept if requested
         if self.include_intercept:
             X = np.column_stack([np.ones(X.shape[0]), X])

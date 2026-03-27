@@ -2029,9 +2029,11 @@ variance from the distribution of replicate estimates.
 - **Note:** CallawaySantAnna, ContinuousDiD, and EfficientDiD reject
   replicate weights with `n_bootstrap > 0`. Replicate weights provide
   analytical variance; bootstrap is a separate inference mechanism.
-- **Note:** When invalid replicates are dropped, `n_replicates` is updated
-  to the valid count so that `df_survey = n_valid - 1` and downstream
-  t-based inference uses the correct degrees of freedom.
+- **Note:** When invalid replicates are dropped in `compute_replicate_vcov`
+  (OLS path), `n_valid` is returned and used for `df_survey = n_valid - 1`
+  in `LinearRegression.fit()`. For IF-based replicate paths, replicates
+  essentially never fail (weighted sums cannot be singular), so `n_valid`
+  equals `R` in practice and df propagation is not needed.
 
 ### DEFF Diagnostics (Phase 6)
 
