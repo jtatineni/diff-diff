@@ -100,6 +100,10 @@ JKn requires explicit `replicate_strata` (per-replicate stratum assignment).
 - Dispatch in `LinearRegression.fit()` and `staggered_aggregation.py`
 - Replicate weights mutually exclusive with strata/PSU/FPC
 - Survey df = R-1 for replicate designs
+- **Limitations**: SunAbraham rejects replicate-weight designs (weighted
+  within-transformation must be recomputed per replicate — not yet implemented).
+  ContinuousDiD and EfficientDiD reject replicate weights + `n_bootstrap > 0`
+  (replicate variance is analytical, not bootstrap-compatible).
 
 ### DEFF Diagnostics ✅ (2026-03-26)
 Per-coefficient design effects comparing survey vcov to SRS (HC1) vcov.

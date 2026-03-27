@@ -712,25 +712,39 @@ class TestReplicateWeightVariance:
         with pytest.raises(ValueError, match="Cannot identify"):
             solve_logit(X, y, weights=w)
 
-    def test_solve_logit_rejects_rank_deficient_positive_weight_subset(self):
-        """solve_logit should reject when positive-weight subset is rank-deficient
-        even if full design is full rank."""
+    def test_solve_logit_rank_deficient_positive_weight_subset_error_mode(self):
+        """solve_logit with rank_deficient_action='error' should reject when
+        positive-weight subset is rank-deficient."""
         from diff_diff.linalg import solve_logit
 
         n = 20
-        # Full design: intercept + x1 + x2, full rank
         x1 = np.random.randn(n)
         x2 = np.random.randn(n)
         X = np.column_stack([x1, x2])
         y = np.array([1] * 10 + [0] * 10, dtype=float)
         w = np.zeros(n)
-        # Give weight to 6 obs, but make x2 constant among them
-        # (collinear with intercept after subsetting)
         for i in [0, 1, 2, 10, 11, 12]:
             w[i] = 1.0
             X[i, 1] = 5.0  # x2 constant → rank deficient in subset
         with pytest.raises(ValueError, match="rank-deficient"):
-            solve_logit(X, y, weights=w)
+            solve_logit(X, y, weights=w, rank_deficient_action="error")
+
+    def test_solve_logit_rank_deficient_positive_weight_subset_warn_mode(self):
+        """solve_logit with rank_deficient_action='warn' should warn but not
+        error on rank-deficient positive-weight subset."""
+        from diff_diff.linalg import solve_logit
+
+        n = 20
+        x1 = np.random.randn(n)
+        x2 = np.random.randn(n)
+        X = np.column_stack([x1, x2])
+        y = np.array([1] * 10 + [0] * 10, dtype=float)
+        w = np.zeros(n)
+        for i in [0, 1, 2, 10, 11, 12]:
+            w[i] = 1.0
+            X[i, 1] = 5.0
+        with pytest.warns(UserWarning, match="rank-deficient"):
+            solve_logit(X, y, weights=w, rank_deficient_action="warn")
 
     def test_replicate_if_no_divide_by_zero_warning(self):
         """compute_replicate_if_variance should not warn on zero weights."""
@@ -946,3 +960,26 @@ class TestSubpopulationMaskValidation:
         nan_mask[0] = np.nan
         with pytest.raises(ValueError, match="NaN"):
             sd.subpopulation(basic_did_data, nan_mask)
+
+    def test_none_mask_rejected(self, basic_did_data):
+        """Subpopulation mask with None should be rejected."""
+        sd = SurveyDesign(weights="weight")
+        mask = [True] * len(basic_did_data)
+        mask[0] = None
+        with pytest.raises(ValueError, match="None"):
+            sd.subpopulation(basic_did_data, mask)
+
+    def test_efficient_did_replicate_bootstrap_rejected(self):
+        """EfficientDiD should reject replicate weights + n_bootstrap > 0."""
+        from diff_diff import EfficientDiD
+
+        data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        with pytest.raises(NotImplementedError, match="not supported"):
+            EfficientDiD(n_bootstrap=30, seed=42).fit(
+                data, "outcome", "unit", "time", "first_treat",
+                survey_design=sd,
+            )

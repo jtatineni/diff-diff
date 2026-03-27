@@ -426,15 +426,12 @@ class SurveyDesign:
                 "Provide a boolean mask with no missing values."
             )
         if hasattr(raw_mask, 'dtype') and raw_mask.dtype == object:
-            try:
-                # Check for pd.NA or None
-                if any(v is None or (hasattr(v, '__bool__') is False) for v in raw_mask):
-                    raise ValueError(
-                        "Subpopulation mask contains None/NA values. "
-                        "Provide a boolean mask with no missing values."
-                    )
-            except (TypeError, ValueError):
-                pass
+            # Check for None values (pd.NA, None, etc.)
+            if any(v is None for v in raw_mask):
+                raise ValueError(
+                    "Subpopulation mask contains None/NA values. "
+                    "Provide a boolean mask with no missing values."
+                )
         mask_arr = raw_mask.astype(bool)
 
         if len(mask_arr) != len(data):

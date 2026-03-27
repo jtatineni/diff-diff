@@ -945,6 +945,18 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             )
 
         # ----- Bootstrap -----
+        # Reject replicate-weight designs for bootstrap — replicate variance
+        # is an analytical alternative, not compatible with bootstrap
+        if (
+            self.n_bootstrap > 0
+            and self._unit_resolved_survey is not None
+            and self._unit_resolved_survey.uses_replicate_variance
+        ):
+            raise NotImplementedError(
+                "EfficientDiD bootstrap (n_bootstrap > 0) is not supported "
+                "with replicate-weight survey designs. Replicate weights provide "
+                "analytical variance; use n_bootstrap=0 instead."
+            )
         bootstrap_results = None
         if self.n_bootstrap > 0 and eif_by_gt:
             bootstrap_results = self._run_multiplier_bootstrap(
