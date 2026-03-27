@@ -1081,10 +1081,15 @@ class TripleDifference:
             if resolved_survey.uses_replicate_variance:
                 from diff_diff.survey import compute_replicate_if_variance
 
-                # Replicate IF uses raw combined IF (not TSL-deweighted) —
-                # the weight-ratio rescaling in compute_replicate_if_variance
-                # handles survey weighting internally
-                variance = compute_replicate_if_variance(inf_func, resolved_survey)
+                # Score-scale to match TSL bread (1/sum(w)^2):
+                # reg: psi = w * inf_func / sum(w)
+                # ipw/dr: psi = inf_func / sum(w)  (survey weights cancel)
+                w_sum = float(resolved_survey.weights.sum())
+                if est_method in ("ipw", "dr") and survey_weights is not None:
+                    psi_rep = inf_func / w_sum
+                else:
+                    psi_rep = resolved_survey.weights * inf_func / w_sum
+                variance = compute_replicate_if_variance(psi_rep, resolved_survey)
                 se = float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
             else:
                 from diff_diff.survey import compute_survey_vcov
