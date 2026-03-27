@@ -606,9 +606,9 @@ class CallawaySantAnna(
 
         # Guard against zero effective mass after subpopulation filtering
         if sw_treated is not None and np.sum(sw_treated) <= 0:
-            return {"att": np.nan, "se": np.nan}
+            return np.nan, np.nan, 0, 0, None, None
         if sw_control is not None and np.sum(sw_control) <= 0:
-            return {"att": np.nan, "se": np.nan}
+            return np.nan, np.nan, 0, 0, None, None
 
         # Get covariates if specified (from the base period)
         X_treated = None
@@ -806,6 +806,9 @@ class CallawaySantAnna(
             if survey_w is not None:
                 sw_t = survey_w[treated_valid]
                 sw_c = survey_w[control_valid]
+                # Guard against zero effective mass
+                if np.sum(sw_t) <= 0 or np.sum(sw_c) <= 0:
+                    continue
                 sw_t_norm = sw_t / np.sum(sw_t)
                 sw_c_norm = sw_c / np.sum(sw_c)
                 mu_t = float(np.sum(sw_t_norm * treated_change))
