@@ -1379,10 +1379,13 @@ def compute_replicate_vcov(
     outer_sum = diffs.T @ diffs  # (k, k)
 
     if method in ("BRR", "Fay", "JK1"):
-        factor = _replicate_variance_factor(method, n_valid, resolved.fay_rho)
+        # Use original R for scaling, not n_valid — dropped replicates
+        # contribute zero to the sum but don't change the design structure
+        factor = _replicate_variance_factor(method, R, resolved.fay_rho)
         return factor * outer_sum, n_valid
     elif method == "JKn":
         # JKn: V = sum_h ((n_h-1)/n_h) * sum_{r in h} (c_r - c)(c_r - c)^T
+        # Use original per-stratum counts for scaling
         rep_strata = resolved.replicate_strata
         if rep_strata is None:
             raise ValueError("JKn requires replicate_strata")
@@ -1472,9 +1475,12 @@ def compute_replicate_if_variance(
     ss = float(np.sum(diffs**2))
 
     if method in ("BRR", "Fay", "JK1"):
-        factor = _replicate_variance_factor(method, n_valid, resolved.fay_rho)
+        # Use original R for scaling — dropped replicates contribute zero
+        # to the sum but don't change the design structure
+        factor = _replicate_variance_factor(method, R, resolved.fay_rho)
         return factor * ss, n_valid
     elif method == "JKn":
+        # Use original per-stratum counts for scaling
         rep_strata = resolved.replicate_strata
         if rep_strata is None:
             raise ValueError("JKn requires replicate_strata")
