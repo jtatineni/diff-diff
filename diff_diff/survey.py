@@ -1308,6 +1308,9 @@ def compute_replicate_vcov(
             stacklevel=2,
         )
     n_valid = int(np.sum(valid))
+    # Update effective replicate count so df_survey reflects valid replicates
+    if n_valid < R:
+        resolved.n_replicates = n_valid
     if n_valid < 2:
         if n_valid == 0:
             warnings.warn(
@@ -1398,6 +1401,9 @@ def compute_replicate_if_variance(
 
     valid = np.isfinite(theta_reps)
     n_valid = int(np.sum(valid))
+    # Update effective replicate count so df_survey reflects valid replicates
+    if n_valid < R:
+        resolved.n_replicates = n_valid
     if n_valid < 2:
         return np.nan
     diffs = theta_reps[valid] - theta_full
