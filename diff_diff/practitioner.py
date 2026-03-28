@@ -189,8 +189,9 @@ def _parallel_trends_step(staggered: bool = False) -> Dict[str, Any]:
         label="Test parallel trends assumption",
         why=(
             "Parallel trends is the core identifying assumption. "
-            "Insignificant pre-trends do NOT prove it holds — use "
-            "HonestDiD to bound the impact of violations."
+            "Insignificant pre-trends do NOT prove it holds. For "
+            "MultiPeriodDiD or CS results, use HonestDiD to bound "
+            "the impact of violations."
         ),
         code=(
             "from diff_diff import check_parallel_trends\n"
@@ -229,9 +230,10 @@ def _placebo_step() -> Dict[str, Any]:
         ),
         code=(
             "from diff_diff import run_all_placebo_tests\n"
+            "# Requires binary time indicator (post=0/1), not multi-period:\n"
             "placebo = run_all_placebo_tests(\n"
-            "    data, outcome='y', treatment='treated', time='period',\n"
-            "    unit='unit_id', pre_periods=[...], post_periods=[...],\n"
+            "    data, outcome='y', treatment='treated', time='post',\n"
+            "    unit='unit_id', pre_periods=[0], post_periods=[1],\n"
             "    n_permutations=500, seed=42)"
         ),
         priority="medium",
