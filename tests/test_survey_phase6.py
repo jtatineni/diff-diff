@@ -870,6 +870,157 @@ class TestReplicateWeightVariance:
             assert np.isfinite(v)
 
 
+class TestReplicateEdgeCases:
+    """Regression tests for analysis-weight df and rscales centering."""
+
+    def test_df_survey_combined_weights_false(self):
+        """df_survey uses analysis-weight rank when combined_weights=False."""
+        from diff_diff.survey import ResolvedSurveyDesign
+
+        np.random.seed(42)
+        n = 50
+        R = 5
+        weights = 1.0 + np.random.exponential(0.5, n)
+        # Perturbation factors (not full weights)
+        rep_factors = np.random.uniform(0.8, 1.2, (n, R))
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+            replicate_weights=rep_factors,
+            replicate_method="BRR", n_replicates=R,
+            combined_weights=False,
+        )
+        # df should match rank of analysis weights (rep * full-sample)
+        analysis_weights = rep_factors * weights[:, np.newaxis]
+        expected_rank = int(np.linalg.matrix_rank(analysis_weights))
+        expected_df = max(expected_rank - 1, 1)
+        assert resolved.df_survey == expected_df
+
+        # Verify it differs from raw perturbation-factor rank when weights
+        # cause a rank reduction (e.g., zero full-sample weights)
+        weights_with_zeros = weights.copy()
+        weights_with_zeros[:10] = 0.0  # subpopulation-zeroed
+        resolved2 = ResolvedSurveyDesign(
+            weights=weights_with_zeros, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+            replicate_weights=rep_factors,
+            replicate_method="BRR", n_replicates=R,
+            combined_weights=False,
+        )
+        raw_rank = int(np.linalg.matrix_rank(rep_factors))
+        analysis_rank = int(np.linalg.matrix_rank(
+            rep_factors * weights_with_zeros[:, np.newaxis]
+        ))
+        # Analysis rank should be <= raw rank when zero weights present
+        assert analysis_rank <= raw_rank
+        assert resolved2.df_survey == max(analysis_rank - 1, 1)
+
+    def test_rscales_zero_centering_vcov(self):
+        """mse=False with zero rscales: center only on rscales > 0 replicates."""
+        from diff_diff.survey import compute_replicate_vcov, ResolvedSurveyDesign
+        from diff_diff.linalg import solve_ols
+
+        np.random.seed(42)
+        n = 100
+        R = 6
+        x = np.random.randn(n)
+        y = 1.0 + 2.0 * x + np.random.randn(n) * 0.5
+        X = np.column_stack([np.ones(n), x])
+        w = np.ones(n)
+
+        # Build JK1-style replicates
+        cluster_size = n // R
+        rep_arr = np.ones((n, R))
+        for r in range(R):
+            start = r * cluster_size
+            end = min((r + 1) * cluster_size, n)
+            rep_arr[start:end, :] = 0.0
+            # Correct column r only
+            rep_arr[:, r] = np.where(
+                (np.arange(n) >= start) & (np.arange(n) < end), 0.0,
+                R / (R - 1)
+            )
+
+        # rscales with one zero entry
+        rscales = np.array([1.0, 1.0, 0.0, 1.0, 1.0, 1.0])
+
+        coef, _, _ = solve_ols(X, y, weights=w)
+
+        resolved = ResolvedSurveyDesign(
+            weights=w, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+            replicate_weights=rep_arr,
+            replicate_method="BRR", n_replicates=R,
+            replicate_rscales=rscales, mse=False,
+        )
+        vcov, _nv = compute_replicate_vcov(X, y, coef, resolved)
+
+        # Manual computation: center only on replicates with rscales > 0
+        coef_reps = []
+        for r in range(R):
+            c_r, _, _ = solve_ols(X, y, weights=rep_arr[:, r])
+            coef_reps.append(c_r)
+        coef_reps = np.array(coef_reps)
+        pos_mask = rscales > 0
+        center = np.mean(coef_reps[pos_mask], axis=0)
+        diffs = coef_reps - center[np.newaxis, :]
+        V_manual = np.zeros((2, 2))
+        for r in range(R):
+            V_manual += rscales[r] * np.outer(diffs[r], diffs[r])
+
+        assert np.allclose(np.diag(vcov), np.diag(V_manual), rtol=1e-10)
+
+    def test_rscales_zero_centering_if(self):
+        """mse=False with zero rscales: IF path centers only on rscales > 0."""
+        from diff_diff.survey import compute_replicate_if_variance, ResolvedSurveyDesign
+
+        np.random.seed(42)
+        n = 50
+        R = 5
+        psi = np.random.randn(n) * 0.1
+        w = np.ones(n)
+
+        # Build simple replicates
+        rep_arr = np.ones((n, R))
+        for r in range(R):
+            start = r * (n // R)
+            end = min((r + 1) * (n // R), n)
+            rep_arr[start:end, r] = 0.0
+            rep_arr[:, r] = np.where(
+                (np.arange(n) >= start) & (np.arange(n) < end), 0.0,
+                R / (R - 1)
+            )
+
+        rscales = np.array([1.0, 0.0, 1.0, 1.0, 1.0])
+
+        resolved = ResolvedSurveyDesign(
+            weights=w, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+            replicate_weights=rep_arr,
+            replicate_method="BRR", n_replicates=R,
+            replicate_rscales=rscales, mse=False,
+        )
+        var, _nv = compute_replicate_if_variance(psi, resolved)
+
+        # Manual: theta_r = sum((w_r/w) * psi), center on rscales > 0 only
+        theta_full = float(np.sum(psi))
+        theta_reps = np.array([
+            float(np.sum(np.divide(rep_arr[:, r], w, out=np.zeros(n), where=w > 0) * psi))
+            for r in range(R)
+        ])
+        pos_mask = rscales > 0
+        center = float(np.mean(theta_reps[pos_mask]))
+        diffs = theta_reps - center
+        var_manual = float(np.sum(rscales * diffs**2))
+
+        assert var == pytest.approx(var_manual, rel=1e-10)
+
+
 # =============================================================================
 # Estimator-Level Replicate Weight Tests
 # =============================================================================

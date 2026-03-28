@@ -574,9 +574,15 @@ class ResolvedSurveyDesign:
         if self.uses_replicate_variance:
             if self.replicate_weights is None or self.n_replicates < 2:
                 return None
-            # Rank-based df from replicate weight matrix, matching
-            # R's survey::degf() for svrepdesign objects
-            rank = int(np.linalg.matrix_rank(self.replicate_weights))
+            # Rank-based df from analysis-weight matrix, matching
+            # R's survey::degf() which uses weights(design, "analysis").
+            # For combined_weights=True, replicate cols ARE analysis weights.
+            # For combined_weights=False, analysis weights = rep * full-sample.
+            if self.combined_weights:
+                analysis_weights = self.replicate_weights
+            else:
+                analysis_weights = self.replicate_weights * self.weights[:, np.newaxis]
+            rank = int(np.linalg.matrix_rank(analysis_weights))
             return max(rank - 1, 1) if rank > 1 else None
         if self.psu is not None and self.n_psu > 0:
             if self.strata is not None and self.n_strata > 0:
@@ -1375,10 +1381,19 @@ def compute_replicate_vcov(
 
     # Compute variance by method
     # Support mse=False: center on replicate mean instead of full-sample estimate
+    # When rscales present and mse=False, center only over rscales > 0
+    # (R's svrVar convention — zero-scaled replicates should not shift center)
     if resolved.mse:
         center = c
     else:
-        center = np.mean(coef_valid, axis=0)
+        if resolved.replicate_rscales is not None:
+            pos_scale = resolved.replicate_rscales[valid] > 0
+            if np.any(pos_scale):
+                center = np.mean(coef_valid[pos_scale], axis=0)
+            else:
+                center = np.mean(coef_valid, axis=0)
+        else:
+            center = np.mean(coef_valid, axis=0)
     diffs = coef_valid - center[np.newaxis, :]
 
     # Use custom scale/rscales if provided, else default method factor
@@ -1489,10 +1504,19 @@ def compute_replicate_if_variance(
         return np.nan, n_valid
 
     # Support mse=False: center on replicate mean
+    # When rscales present and mse=False, center only over rscales > 0
+    # (R's svrVar convention — zero-scaled replicates should not shift center)
     if resolved.mse:
         center = theta_full
     else:
-        center = float(np.mean(theta_reps[valid]))
+        if resolved.replicate_rscales is not None:
+            pos_scale = resolved.replicate_rscales[valid] > 0
+            if np.any(pos_scale):
+                center = float(np.mean(theta_reps[valid][pos_scale]))
+            else:
+                center = float(np.mean(theta_reps[valid]))
+        else:
+            center = float(np.mean(theta_reps[valid]))
     diffs = theta_reps[valid] - center
 
     # Custom scale/rscales

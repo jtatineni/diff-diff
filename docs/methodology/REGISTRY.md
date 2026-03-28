@@ -2011,8 +2011,11 @@ variance from the distribution of replicate estimates.
   contrasts are formed via weight-ratio rescaling:
   `theta_r = sum((w_r/w_full) * psi)` when `combined_weights=True`,
   `theta_r = sum(w_r * psi)` when `combined_weights=False`.
-- **Survey df**: Numerical rank of replicate weight matrix minus 1,
-  matching R's `survey::degf()`. Replaces `n_PSU - n_strata`.
+- **Survey df**: Numerical rank of the analysis-weight matrix minus 1,
+  matching R's `survey::degf()`. For `combined_weights=True` (default),
+  analysis weights are the raw replicate columns. For `combined_weights=False`,
+  analysis weights are `replicate_weights * full_sample_weights`.
+  Replaces `n_PSU - n_strata`.
 - **Mutual exclusion**: Replicate weights cannot be combined with
   strata/psu/fpc (the replicates encode design structure implicitly)
 - **Design parameters** (matching R `svrepdesign()`):
@@ -2023,7 +2026,9 @@ variance from the distribution of replicate estimates.
   - `replicate_rscales`: per-replicate scaling factors (vector of length R)
   - `mse` (default False, matching R's `survey::svrepdesign()`): if True,
     center variance on full-sample estimate; if False, center on mean of
-    replicate estimates.
+    replicate estimates. When `replicate_rscales` contains zero entries
+    and `mse=False`, centering excludes zero-scaled replicates, matching
+    R's `survey::svrVar()` convention.
 - **Note:** Replicate columns are NOT normalized — raw values are preserved
   to maintain correct weight ratios in the IF path.
 - **Note:** JKn requires explicit `replicate_strata` (per-replicate stratum
