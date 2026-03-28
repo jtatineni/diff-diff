@@ -2043,7 +2043,11 @@ class LinearRegression:
             effective_df = self.df_
 
         # Warn if df is non-positive and fall back to normal distribution
-        if effective_df is not None and effective_df <= 0:
+        # (skip for replicate designs — df=0 is intentional for NaN inference)
+        _is_replicate = (hasattr(self, 'survey_design') and self.survey_design is not None
+                         and hasattr(self.survey_design, 'uses_replicate_variance')
+                         and self.survey_design.uses_replicate_variance)
+        if effective_df is not None and effective_df <= 0 and not _is_replicate:
             import warnings
 
             warnings.warn(

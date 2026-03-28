@@ -527,6 +527,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             )
             # Use unit-level df (not panel-level) for t-distribution
             self._survey_df = self._unit_resolved_survey.df_survey
+            # Re-apply replicate guard: undefined df → NaN inference
+            if (self._survey_df is None
+                    and self._unit_resolved_survey.uses_replicate_variance):
+                self._survey_df = 0
         else:
             self._unit_resolved_survey = None
 

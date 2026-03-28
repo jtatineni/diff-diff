@@ -1410,6 +1410,11 @@ class CallawaySantAnna(
         # Survey df for safe_inference calls — use the unit-level resolved
         # survey df computed in _precompute_structures for consistency.
         df_survey = precomputed.get("df_survey")
+        # Guard: replicate design with undefined df (rank <= 1) → NaN inference
+        if (df_survey is None and resolved_survey is not None
+                and hasattr(resolved_survey, 'uses_replicate_variance')
+                and resolved_survey.uses_replicate_variance):
+            df_survey = 0
 
         # Compute ATT(g,t) for each group-time combination
         min_period = min(time_periods)
