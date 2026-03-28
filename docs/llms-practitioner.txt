@@ -152,8 +152,10 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |   \-- DifferenceInDifferences (DiD)
 |
 |-- Few treated units (< 20)?
-|   |-- SyntheticDiD (SDiD)    -- synthetic control + DiD hybrid
-|   \-- TROP                   -- triply robust with factor adjustment
+|   \-- SyntheticDiD (SDiD)    -- synthetic control + DiD hybrid
+|
+|-- Suspected factor confounding / interactive fixed effects?
+|   \-- TROP                   -- triply robust with nuclear norm factor adjustment
 |
 |-- Continuous treatment (doses)?
 |   \-- ContinuousDiD (CDiD)
