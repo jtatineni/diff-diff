@@ -257,10 +257,16 @@ print(honest.summary())
 honest_sd = compute_honest_did(results, method='smoothness', M=0.5)
 ```
 
-### Placebo tests
+### Placebo tests (simple 2x2 designs only)
+`run_all_placebo_tests()` refits a basic 2x2 DiD — it is valid for simple
+designs but NOT for staggered adoption. For staggered designs, use
+specification-based falsification: compare results across control group
+choices, anticipation settings, and cohort subsets.
+
 ```python
 from diff_diff import run_all_placebo_tests
 
+# For simple 2x2 designs:
 placebo = run_all_placebo_tests(
     data, outcome='y', treatment='treated', time='period',
     unit='unit_id', pre_periods=[1, 2, 3], post_periods=[4, 5, 6],

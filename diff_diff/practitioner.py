@@ -188,7 +188,27 @@ def _honest_did_step() -> Dict[str, Any]:
     )
 
 
-def _placebo_step() -> Dict[str, Any]:
+def _placebo_step(staggered: bool = False) -> Dict[str, Any]:
+    if staggered:
+        return _step(
+            baker_step=6,
+            label="Run sensitivity/falsification checks",
+            why=(
+                "For staggered designs, run_all_placebo_tests() is not "
+                "directly applicable (it refits a basic 2x2 DiD). Instead, "
+                "compare results across control group choices "
+                "(never_treated vs not_yet_treated), anticipation settings, "
+                "and subsample restrictions as falsification checks."
+            ),
+            code=(
+                "# Staggered falsification: compare across specifications\n"
+                "# - Re-estimate with control_group='never_treated' vs 'not_yet_treated'\n"
+                "# - Re-estimate with anticipation=1 to check no-anticipation\n"
+                "# - Drop one cohort at a time for leave-one-out sensitivity"
+            ),
+            priority="medium",
+            step_name="sensitivity",
+        )
     return _step(
         baker_step=6,
         label="Run placebo tests",
@@ -328,7 +348,7 @@ def _handle_cs(results: Any):
 def _handle_sa(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(),
+        _placebo_step(staggered=True),
         _robustness_compare_step("CS, BJS, or Gardner"),
         _covariates_step(),
     ]
@@ -339,7 +359,7 @@ def _handle_sa(results: Any):
 def _handle_imputation(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(),
+        _placebo_step(staggered=True),
         _robustness_compare_step("CS, SA, or Gardner"),
         _covariates_step(),
     ]
@@ -350,7 +370,7 @@ def _handle_imputation(results: Any):
 def _handle_two_stage(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(),
+        _placebo_step(staggered=True),
         _robustness_compare_step("CS, BJS, or SA"),
         _covariates_step(),
     ]
@@ -361,7 +381,7 @@ def _handle_two_stage(results: Any):
 def _handle_stacked(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(),
+        _placebo_step(staggered=True),
         _step(
             baker_step=7,
             label="Check sub-experiment balance",
@@ -396,7 +416,7 @@ def _handle_synthetic(results: Any):
             ),
             step_name="sensitivity",
         ),
-        _placebo_step(),
+        _placebo_step(staggered=True),
         _step(
             baker_step=8,
             label="Compare with TROP or staggered estimators",
@@ -433,7 +453,7 @@ def _handle_trop(results: Any):
             ),
             step_name="sensitivity",
         ),
-        _placebo_step(),
+        _placebo_step(staggered=True),
         _robustness_compare_step("SyntheticDiD or CS"),
     ]
     warnings = _check_nan_att(results)
@@ -443,7 +463,7 @@ def _handle_trop(results: Any):
 def _handle_efficient(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(),
+        _placebo_step(staggered=True),
         _step(
             baker_step=7,
             label="Run Hausman pretest (PT-All vs PT-Post)",
@@ -468,7 +488,21 @@ def _handle_efficient(results: Any):
 
 def _handle_continuous(results: Any):
     steps = [
-        _parallel_trends_step(),
+        _step(
+            baker_step=3,
+            label="Assess parallel trends for continuous treatment",
+            why=(
+                "ContinuousDiD has dose-specific parallel trends assumptions "
+                "(PT/SPT) that differ from the binary treatment case. No "
+                "built-in formal test exists; inspect dose-specific "
+                "pre-treatment outcome trends across dose groups manually."
+            ),
+            code=(
+                "# No built-in formal PT test for continuous treatment.\n"
+                "# Inspect pre-treatment outcome trends by dose group."
+            ),
+            step_name="parallel_trends",
+        ),
         _step(
             baker_step=7,
             label="Plot dose-response curve",
@@ -501,8 +535,23 @@ def _handle_continuous(results: Any):
 
 def _handle_triple(results: Any):
     steps = [
-        _parallel_trends_step(),
-        _placebo_step(),
+        _step(
+            baker_step=3,
+            label="Assess parallel trends for triple difference",
+            why=(
+                "DDD requires parallel trends along two dimensions "
+                "(treatment eligibility and treatment exposure). The "
+                "generic check_parallel_trends() only tests a single "
+                "binary comparison. Inspect pre-treatment trends "
+                "separately for each dimension."
+            ),
+            code=(
+                "# No built-in formal DDD PT test.\n"
+                "# Inspect pre-treatment trends in the treatment and\n"
+                "# eligibility dimensions separately."
+            ),
+            step_name="parallel_trends",
+        ),
         _step(
             baker_step=7,
             label="Test within-group placebo",
@@ -616,7 +665,12 @@ def _check_nan_att(results: Any) -> List[str]:
         att = getattr(results, "overall_att", None)
     if att is None:
         att = getattr(results, "avg_att", None)
-    if att is not None and isinstance(att, float) and math.isnan(att):
+    if att is not None:
+        try:
+            att = float(att)
+        except (TypeError, ValueError):
+            return []
+    if att is not None and math.isnan(att):
         return [
             "Estimation produced NaN ATT — check data preparation and "
             "model specification before proceeding with diagnostics."
