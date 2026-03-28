@@ -73,7 +73,7 @@ periods but can be assessed with pre-treatment data.
 Variants for staggered designs:
 - **PT-GT-Nev**: Parallel trends between each cohort and never-treated units
 - **PT-GT-NYT**: Parallel trends between each cohort and not-yet-treated units
-  (recommended for most applications)
+  (larger comparison group but requires no anticipation for not-yet-treated units)
 - **PT-GT-all**: Parallel trends across all groups and periods (most restrictive)
 - **Conditional PT**: Parallel trends holds within covariate strata (use with
   covariates via `estimation_method="dr"`)
@@ -117,7 +117,7 @@ universal pre-periods, which is invalid when cohorts adopt at different times
 CS event-study pre-period coefficients as the pre-trends diagnostic:
 ```python
 # Fit CS with event_study aggregation, then inspect pre-periods
-cs = CallawaySantAnna(control_group='not_yet_treated', cluster='unit_id')
+cs = CallawaySantAnna(control_group='never_treated', cluster='unit_id')
 results = cs.fit(data, ..., aggregate='event_study')
 
 # Pre-treatment relative-time ATTs should be near zero
@@ -203,7 +203,7 @@ Now run the estimator chosen in Step 4. Examples for common designs:
 from diff_diff import CallawaySantAnna
 
 cs = CallawaySantAnna(
-    control_group='not_yet_treated',  # or 'never_treated'
+    control_group='never_treated',  # or 'not_yet_treated' — context-dependent choice
     estimation_method='dr',            # doubly robust (recommended)
     cluster='county_id',
     n_bootstrap=999,
@@ -344,7 +344,7 @@ Run at least 2-3 different estimators on the same data:
 ```python
 from diff_diff import CallawaySantAnna, SunAbraham, ImputationDiD
 
-cs = CallawaySantAnna(control_group='not_yet_treated', estimation_method='dr')
+cs = CallawaySantAnna(control_group='never_treated', estimation_method='dr')
 sa = SunAbraham()
 bjs = ImputationDiD()
 
@@ -435,7 +435,7 @@ data = load_mpdta()
 
 # Step 1: Target — overall ATT for the policy, weighted by cohort size
 
-# Step 2: Assumptions — PT-GT-NYT (not-yet-treated parallel trends),
+# Step 2: Assumptions — PT-GT-Nev (never-treated parallel trends),
 #          no anticipation, doubly robust for conditional PT
 
 # Step 3: Test parallel trends
@@ -455,7 +455,7 @@ print(bacon_result.summary())
 n_clusters = data['countyreal'].nunique()
 print(f"Clusters: {n_clusters} -> {'cluster-robust SEs' if n_clusters >= 50 else 'wild bootstrap'}")
 cs = CallawaySantAnna(
-    control_group='not_yet_treated', estimation_method='dr',
+    control_group='never_treated', estimation_method='dr',
     cluster='countyreal',
 )
 results = cs.fit(data, outcome='lemp', unit='countyreal', time='year',

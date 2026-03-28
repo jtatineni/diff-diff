@@ -713,7 +713,7 @@ def _handle_bacon(results: Any):
             ),
             code=(
                 "from diff_diff import CallawaySantAnna\n"
-                "cs = CallawaySantAnna(control_group='not_yet_treated',\n"
+                "cs = CallawaySantAnna(control_group='never_treated',\n"
                 "                      estimation_method='dr')\n"
                 "results = cs.fit(data, ...)"
             ),
