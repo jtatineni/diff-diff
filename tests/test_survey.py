@@ -2367,7 +2367,7 @@ class TestRound9Fixes:
         y = np.random.randn(n)
         w = np.array([1.5, 2.3, 1.0, 2.0, 1.7, 3.0, 1.0, 2.0, 1.0, 1.0])
 
-        with pytest.raises(ValueError, match="positive integers"):
+        with pytest.raises(ValueError, match="non-negative integers"):
             solve_ols(X, y, weights=w, weight_type="fweight")
 
     def test_fractional_fweight_rejected_compute_robust_vcov(self):
@@ -2378,7 +2378,7 @@ class TestRound9Fixes:
         resid = np.random.randn(n)
         w = np.array([1.5, 2.0, 1.0, 2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 1.0])
 
-        with pytest.raises(ValueError, match="positive integers"):
+        with pytest.raises(ValueError, match="non-negative integers"):
             compute_robust_vcov(X, resid, weights=w, weight_type="fweight")
 
     def test_integer_fweight_accepted(self):

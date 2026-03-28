@@ -1408,6 +1408,56 @@ class TestSubpopulationMaskValidation:
                 replicate_method="JK1", replicate_rscales=[-1.0, 1.0],
             )
 
+    def _replicate_sd_and_data(self):
+        data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        return data, sd
+
+    def test_multi_period_did_replicate_rejected(self):
+        """MultiPeriodDiD rejects replicate-weight designs."""
+        from diff_diff.estimators import MultiPeriodDiD
+        data, sd = self._replicate_sd_and_data()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        data["post"] = (data["time"] >= 3).astype(int)
+        with pytest.raises(NotImplementedError):
+            MultiPeriodDiD().fit(
+                data, outcome="outcome", treatment="treated",
+                time="post", survey_design=sd,
+            )
+
+    def test_imputation_did_replicate_rejected(self):
+        """ImputationDiD rejects replicate-weight designs."""
+        from diff_diff.imputation import ImputationDiD
+        data, sd = self._replicate_sd_and_data()
+        with pytest.raises(NotImplementedError):
+            ImputationDiD().fit(
+                data, outcome="outcome", unit="unit", time="time",
+                first_treat="first_treat", survey_design=sd,
+            )
+
+    def test_two_stage_did_replicate_rejected(self):
+        """TwoStageDiD rejects replicate-weight designs."""
+        from diff_diff.two_stage import TwoStageDiD
+        data, sd = self._replicate_sd_and_data()
+        with pytest.raises(NotImplementedError):
+            TwoStageDiD().fit(
+                data, outcome="outcome", unit="unit", time="time",
+                first_treat="first_treat", survey_design=sd,
+            )
+
+    def test_bacon_replicate_rejected(self):
+        """BaconDecomposition rejects replicate-weight designs."""
+        from diff_diff.bacon import BaconDecomposition
+        data, sd = self._replicate_sd_and_data()
+        with pytest.raises(NotImplementedError):
+            BaconDecomposition().fit(
+                data, outcome="outcome", unit="unit", time="time",
+                first_treat="first_treat", survey_design=sd,
+            )
+
 
 # =============================================================================
 # Effective-sample and d.f. consistency tests

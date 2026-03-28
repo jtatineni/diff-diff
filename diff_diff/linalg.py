@@ -411,7 +411,7 @@ def _validate_weights(weights, weight_type, n):
             fractional = weights - np.round(weights)
             if np.any(np.abs(fractional) > 1e-10):
                 raise ValueError(
-                    "Frequency weights (fweight) must be positive integers. "
+                    "Frequency weights (fweight) must be non-negative integers. "
                     "Fractional values detected. Use pweight for non-integer weights."
                 )
     return weights

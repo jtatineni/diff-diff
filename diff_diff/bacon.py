@@ -462,6 +462,13 @@ class BaconDecomposition:
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
+        # Reject replicate-weight designs — Bacon decomposition is a
+        # diagnostic that does not compute replicate-based variance
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "BaconDecomposition does not support replicate-weight survey "
+                "designs. Use a TSL-based survey design (strata/psu/fpc)."
+            )
 
         # Validate within-unit constancy for exact survey weights only.
         # The exact-weight path collapses to per-unit weights via groupby().first(),
