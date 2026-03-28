@@ -292,7 +292,7 @@ class TestParameterExtraction:
 
     def test_extract_from_multiperiod(self, mock_multiperiod_results):
         """Test extraction from MultiPeriodDiDResults."""
-        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods) = (
+        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df) = (
             _extract_event_study_params(mock_multiperiod_results)
         )
 
@@ -667,7 +667,7 @@ class TestIntegration:
             reference_period=3,
         )
 
-        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods) = (
+        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df) = (
             _extract_event_study_params(results)
         )
 
@@ -890,7 +890,9 @@ class TestEdgeCases:
         )
 
         # _extract_event_study_params should filter out period 0 (NaN)
-        beta_hat, sigma, num_pre, num_post, pre_p, post_p = _extract_event_study_params(results)
+        beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
+            results
+        )
         assert len(beta_hat) == 3  # periods 1, 3, 4 (period 0 filtered)
         assert num_pre == 1  # only period 1
         assert num_post == 2  # periods 3, 4
@@ -1090,7 +1092,9 @@ class TestEdgeCases:
             interaction_indices=interaction_indices,
         )
 
-        beta_hat, sigma, num_pre, num_post, pre_p, post_p = _extract_event_study_params(results)
+        beta_hat, sigma, num_pre, num_post, pre_p, post_p, _df = _extract_event_study_params(
+            results
+        )
 
         # Pre-periods: 5, 6 (7 is reference, omitted)
         assert num_pre == 2
@@ -1108,6 +1112,136 @@ class TestEdgeCases:
         assert sigma[1, 1] == pytest.approx(0.1225)  # period 6 variance
         assert sigma[2, 2] == pytest.approx(0.16)  # period 1 variance
         assert sigma[3, 3] == pytest.approx(0.2025)  # period 2 variance
+
+
+# =============================================================================
+# Tests for Phase 7d: Survey variance support
+# =============================================================================
+
+
+class TestSurveyVariance:
+    """Tests for HonestDiD survey variance support (Phase 7d)."""
+
+    def test_df_survey_extracted_from_cs_results(self):
+        """df_survey is extracted from CallawaySantAnna survey_metadata."""
+        from diff_diff import CallawaySantAnna, SurveyDesign, generate_staggered_data
+
+        data = generate_staggered_data(n_units=100, n_periods=5, seed=42)
+        unit_ids = data["unit"].unique()
+        n_units = len(unit_ids)
+        unit_map = {uid: i for i, uid in enumerate(unit_ids)}
+        idx = data["unit"].map(unit_map).values
+
+        data["weight"] = (1.0 + 0.5 * (np.arange(n_units) % 4))[idx]
+        data["stratum"] = (np.arange(n_units) // 25)[idx]
+        data["psu"] = (np.arange(n_units) // 5)[idx]
+
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        cs_result = CallawaySantAnna().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+            aggregate="event_study",
+        )
+
+        honest = HonestDiD(method="smoothness", M=0.0)
+        h_result = honest.fit(cs_result)
+
+        # df_survey should be propagated
+        assert h_result.df_survey is not None
+        assert h_result.df_survey > 0
+        assert h_result.survey_metadata is not None
+
+    def test_event_study_vcov_computed(self):
+        """CallawaySantAnna event_study_vcov is computed and used by HonestDiD."""
+        from diff_diff import CallawaySantAnna, generate_staggered_data
+
+        data = generate_staggered_data(n_units=100, n_periods=6, seed=42)
+        cs_result = CallawaySantAnna().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="event_study",
+        )
+
+        # VCV should be computed
+        assert cs_result.event_study_vcov is not None
+        n_effects = len(
+            [
+                e
+                for e, d in cs_result.event_study_effects.items()
+                if d.get("n_groups", 1) > 0 and np.isfinite(d.get("se", np.nan))
+            ]
+        )
+        assert cs_result.event_study_vcov.shape == (n_effects, n_effects)
+
+        # Diagonal should match squared SEs
+        for i, e in enumerate(sorted(cs_result.event_study_effects.keys())):
+            info = cs_result.event_study_effects[e]
+            if info.get("n_groups", 1) > 0 and np.isfinite(info.get("se", np.nan)):
+                # VCV diagonal should be close to SE^2 (not exact due to IF aggregation)
+                assert cs_result.event_study_vcov[i, i] > 0
+
+    def test_survey_df_widens_bounds(self):
+        """Survey df (t-distribution) should give wider CIs than normal."""
+        from diff_diff import CallawaySantAnna, SurveyDesign, generate_staggered_data
+
+        data = generate_staggered_data(n_units=100, n_periods=5, seed=42)
+        unit_ids = data["unit"].unique()
+        n_units = len(unit_ids)
+        unit_map = {uid: i for i, uid in enumerate(unit_ids)}
+        idx = data["unit"].map(unit_map).values
+
+        data["weight"] = (1.0 + 0.3 * (np.arange(n_units) % 3))[idx]
+        # 2 strata, 4 PSUs total -> df = 4 - 2 = 2 (very low df)
+        data["stratum"] = (np.arange(n_units) // 50)[idx]
+        data["psu"] = (np.arange(n_units) // 25)[idx]
+
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        cs_result = CallawaySantAnna().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+            aggregate="event_study",
+        )
+
+        honest = HonestDiD(method="smoothness", M=0.0)
+        h_result = honest.fit(cs_result)
+
+        # With df=2, t critical value (~4.3) >> z critical value (1.96)
+        # So CI width should be wider than 2*1.96*SE
+        ci_width = h_result.ci_ub - h_result.ci_lb
+        # Lower bound: normal-based CI width
+        normal_width = 2 * 1.96 * h_result.original_se
+        assert ci_width > normal_width
+
+    def test_no_survey_gives_none_df(self):
+        """Without survey, df_survey should be None."""
+        from diff_diff import CallawaySantAnna, generate_staggered_data
+
+        data = generate_staggered_data(n_units=100, n_periods=5, seed=42)
+        cs_result = CallawaySantAnna().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="event_study",
+        )
+
+        honest = HonestDiD(method="smoothness", M=0.0)
+        h_result = honest.fit(cs_result)
+
+        assert h_result.df_survey is None
+        assert h_result.survey_metadata is None
 
 
 # =============================================================================

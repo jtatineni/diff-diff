@@ -72,10 +72,10 @@ TripleDifference IPW/DR from Phase 3 deferred work.
 
 ### Phase 5 Deferred Work
 
-| Estimator | Deferred Capability | Blocker |
-|-----------|-------------------|---------|
-| SyntheticDiD | strata/PSU/FPC + survey-aware bootstrap | Bootstrap + Survey Interaction |
-| TROP | strata/PSU/FPC + survey-aware bootstrap | Bootstrap + Survey Interaction |
+| Estimator | Deferred Capability | Status |
+|-----------|-------------------|--------|
+| SyntheticDiD | strata/PSU/FPC + survey-aware bootstrap | Resolved in Phase 6 |
+| TROP | strata/PSU/FPC + survey-aware bootstrap | Resolved in Phase 6 |
 
 ## Phase 6: Advanced Features
 
@@ -104,7 +104,8 @@ JKn requires explicit `replicate_strata` (per-replicate stratum assignment).
   TripleDifference (analytical only, no bootstrap). Rejected with
   `NotImplementedError` in DifferenceInDifferences, TwoWayFixedEffects,
   MultiPeriodDiD, StackedDiD, SunAbraham, ImputationDiD, TwoStageDiD,
-  SyntheticDiD, TROP.
+  SyntheticDiD, TROP. Expansion to regression-based estimators (SA,
+  Imputation, TwoStage, Stacked) is straightforward but deferred.
 
 ### DEFF Diagnostics ✅ (2026-03-26)
 Per-coefficient design effects comparing survey vcov to SRS (HC1) vcov.
@@ -120,3 +121,115 @@ estimation (unlike simple subsetting, which would drop design information).
 - Mask: bool array/Series, column name, or callable
 - Returns (SurveyDesign, DataFrame) pair with synthetic `_subpop_weight` column
 - Weight validation relaxed: zero weights allowed (negative still rejected)
+
+---
+
+## Phase 7: Completing the Survey Story
+
+These items close the remaining gaps that matter for practitioners using major
+population surveys (ACS, CPS, BRFSS, MEPS) with modern DiD methods. Together
+they make diff-diff the only package — R or Python — with full design-based
+variance estimation for heterogeneity-robust DiD estimators.
+
+### 7a. CallawaySantAnna Covariates + IPW/DR + Survey ✅
+
+**Priority: High.** This is the single highest-impact gap. The Callaway-Sant'Anna
+`reg` method with covariates already works under survey designs, but the
+recommended IPW and DR methods raise `NotImplementedError`. Most applied work
+(Medicaid expansion, minimum wage studies) uses DR with covariates.
+
+**What's needed:**
+- Implement DRDID panel nuisance-estimation influence function corrections
+  under survey weights (Sant'Anna & Zhao 2020, Theorem 3.1)
+- Survey-weighted propensity score estimation via `solve_logit()` (already
+  available from Phase 4)
+- Survey-weighted outcome regression for imputation step
+- Correct IF that accounts for nuisance parameter estimation uncertainty
+  under the survey design
+- Thread `ResolvedSurveyDesign` through the IPW and DR paths in
+  `_estimate_att_gt()`
+
+**Reference:** Sant'Anna, P.H.C. & Zhao, J. (2020). "Doubly Robust
+Difference-in-Differences Estimators." *Journal of Econometrics* 219(1).
+
+**Current gate:** `staggered.py` — `NotImplementedError` when
+`estimation_method in ('ipw', 'dr')` and covariates are provided with
+`survey_design`.
+
+### 7b. Repeated Cross-Sections ✅
+
+**Priority: High.** Many major surveys (BRFSS, ACS annual cross-sections,
+CPS monthly) are not panels — units are not followed over time. The R `did`
+package supports `panel=FALSE` for these settings. diff-diff currently
+requires panel data for all staggered estimators.
+
+**What's needed:**
+- `panel` parameter on `CallawaySantAnna` (default `True`, set `False` for
+  repeated cross-sections)
+- Repeated cross-section ATT(g,t) estimation using cross-sectional DRDID
+  (Sant'Anna & Zhao 2020, Section 4)
+- Cross-sectional propensity score: model P(G=g | X) instead of panel
+  first-difference
+- Cross-sectional outcome regression: model E[Y | X, G, T] instead of
+  E[ΔY | X, G]
+- Influence functions for cross-sectional case (different from panel IF)
+- Survey weight support for repeated cross-sections (weights apply per
+  observation, no unit-level collapse)
+- Update `generate_did_data()` / `generate_staggered_data()` with
+  `panel=False` option for testing
+
+**Reference:** Sant'Anna, P.H.C. & Zhao, J. (2020). Sections 3 (panel) vs
+4 (repeated cross-sections). Callaway, B. & Sant'Anna, P.H.C. (2021).
+Section 4.1.
+
+**Scope:** CallawaySantAnna only. Other staggered estimators (SunAbraham,
+ImputationDiD, TwoStageDiD, StackedDiD) are inherently panel methods.
+
+### 7c. Survey-Aware DiD Tutorial
+
+**Priority: High.** diff-diff is the only package (R or Python) with
+design-based variance estimation for modern DiD estimators, but no one
+knows this. A tutorial demonstrating the full workflow with realistic
+survey data would make the capability discoverable.
+
+**What's needed:**
+- Jupyter notebook: `docs/tutorials/16_survey_did.ipynb`
+- Sections:
+  1. Why survey design matters for DiD (variance inflation from clustering,
+     weight effects on point estimates — cite Solon, Haider & Wooldridge 2015)
+  2. Setting up `SurveyDesign` (weights, strata, PSU, FPC)
+  3. Basic DiD with survey design (compare naive vs. design-based SEs)
+  4. Staggered DiD with survey weights (CallawaySantAnna)
+  5. Replicate weights workflow (BRR/JKn for MEPS/ACS PUMS users)
+  6. Subpopulation analysis
+  7. DEFF diagnostics — interpreting design effects
+  8. Comparison: show that R's `did` package with `weightsname` gives
+     survey-naive variance while diff-diff gives design-based variance
+- Use realistic synthetic data mimicking ACS/CPS structure (stratified
+  multi-stage design with known treatment effect)
+- Cross-reference from README, choosing_estimator.rst, and quickstart.rst
+
+### 7d. HonestDiD with Survey Variance ✅
+
+**Priority: Medium.** Sensitivity analysis (Rambachan & Roth 2023) currently
+uses cluster-robust or HC variance. Under complex survey designs, the
+variance-covariance matrix should come from TSL or replicate weights.
+
+**What's needed:**
+- Accept optional `survey_design` parameter in `HonestDiD`
+- When provided, use survey vcov matrix instead of cluster-robust vcov
+  for computing sensitivity bounds
+- Degrees of freedom from survey design (n_PSU - n_strata) for
+  t-distribution critical values
+- Propagate through all three methods: relative magnitudes, smoothness,
+  and conditional least favorable (C-LF)
+- The core optimization (LP/QP for bounds) is unchanged — only the input
+  vcov and df change
+
+**Reference:** Rambachan, A. & Roth, J. (2023). "A More Credible Approach
+to Parallel Trends." *Review of Economic Studies* 90(5).
+
+**Why it matters:** A practitioner who runs CS with survey design but then
+runs HonestDiD sensitivity analysis with cluster-robust SEs gets
+inconsistent inference. The sensitivity bounds should respect the same
+variance structure as the main estimates.

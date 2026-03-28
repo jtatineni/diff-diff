@@ -114,6 +114,8 @@ class CallawaySantAnnaResults:
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     group_effects: Optional[Dict[Any, Dict[str, Any]]] = field(default=None)
     influence_functions: Optional["np.ndarray"] = field(default=None, repr=False)
+    # Full event-study VCV matrix (Phase 7d): indexed by sorted relative times
+    event_study_vcov: Optional["np.ndarray"] = field(default=None, repr=False)
     bootstrap_results: Optional["CSBootstrapResults"] = field(default=None, repr=False)
     cband_crit_value: Optional[float] = None
     pscore_trim: float = 0.01

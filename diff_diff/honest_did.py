@@ -22,11 +22,12 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from scipy import optimize, stats
+from scipy import optimize
 
 from diff_diff.results import (
     MultiPeriodDiDResults,
 )
+from diff_diff.utils import _get_critical_value
 
 # =============================================================================
 # Delta Restriction Classes
@@ -193,6 +194,9 @@ class HonestDiDResults:
     original_results: Optional[Any] = field(default=None, repr=False)
     # Event study bounds (optional)
     event_study_bounds: Optional[Dict[Any, Dict[str, float]]] = field(default=None, repr=False)
+    # Survey design metadata (Phase 7d)
+    survey_metadata: Optional[Any] = field(default=None, repr=False)
+    df_survey: Optional[int] = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         sig = "" if self.ci_lb <= 0 <= self.ci_ub else "*"
@@ -534,7 +538,7 @@ class SensitivityResults:
 
 def _extract_event_study_params(
     results: Union[MultiPeriodDiDResults, Any],
-) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any]]:
+) -> Tuple[np.ndarray, np.ndarray, int, int, List[Any], List[Any], Optional[int]]:
     """
     Extract event study parameters from results objects.
 
@@ -557,6 +561,8 @@ def _extract_event_study_params(
         Pre-period identifiers.
     post_periods : list
         Post-period identifiers.
+    df_survey : int or None
+        Survey degrees of freedom for t-distribution inference.
     """
     if isinstance(results, MultiPeriodDiDResults):
         # Extract from MultiPeriodDiD
@@ -606,7 +612,20 @@ def _extract_event_study_params(
             # Fallback: diagonal from SEs
             sigma = np.diag(np.array(ses) ** 2)
 
-        return beta_hat, sigma, num_pre_periods, num_post_periods, pre_periods, post_periods
+        # Extract survey df if available
+        df_survey = None
+        if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
+            df_survey = getattr(results.survey_metadata, "df_survey", None)
+
+        return (
+            beta_hat,
+            sigma,
+            num_pre_periods,
+            num_post_periods,
+            pre_periods,
+            post_periods,
+            df_survey,
+        )
 
     else:
         # Try CallawaySantAnnaResults
@@ -641,9 +660,29 @@ def _extract_event_study_params(
                     ses.append(event_effects[t]["se"])
 
                 beta_hat = np.array(effects)
-                sigma = np.diag(np.array(ses) ** 2)
 
-                return (beta_hat, sigma, len(pre_times), len(post_times), pre_times, post_times)
+                # Use full event-study VCV if available (Phase 7d),
+                # otherwise fall back to diagonal from SEs
+                if hasattr(results, "event_study_vcov") and results.event_study_vcov is not None:
+                    # event_study_vcov is indexed by sorted rel_times
+                    sigma = results.event_study_vcov
+                else:
+                    sigma = np.diag(np.array(ses) ** 2)
+
+                # Extract survey df
+                df_survey = None
+                if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
+                    df_survey = getattr(results.survey_metadata, "df_survey", None)
+
+                return (
+                    beta_hat,
+                    sigma,
+                    len(pre_times),
+                    len(post_times),
+                    pre_times,
+                    post_times,
+                    df_survey,
+                )
         except ImportError:
             pass
 
@@ -860,7 +899,13 @@ def _solve_bounds_lp(
     return lb, ub
 
 
-def _compute_flci(lb: float, ub: float, se: float, alpha: float = 0.05) -> Tuple[float, float]:
+def _compute_flci(
+    lb: float,
+    ub: float,
+    se: float,
+    alpha: float = 0.05,
+    df: Optional[int] = None,
+) -> Tuple[float, float]:
     """
     Compute Fixed Length Confidence Interval (FLCI).
 
@@ -877,6 +922,9 @@ def _compute_flci(lb: float, ub: float, se: float, alpha: float = 0.05) -> Tuple
         Standard error of the estimator.
     alpha : float
         Significance level.
+    df : int, optional
+        Degrees of freedom. If provided, uses t-distribution critical value
+        instead of normal (for survey designs with df = n_PSU - n_strata).
 
     Returns
     -------
@@ -895,7 +943,7 @@ def _compute_flci(lb: float, ub: float, se: float, alpha: float = 0.05) -> Tuple
     if not (0 < alpha < 1):
         raise ValueError(f"alpha must be between 0 and 1, got alpha={alpha}")
 
-    z = stats.norm.ppf(1 - alpha / 2)
+    z = _get_critical_value(alpha, df)
     ci_lb = lb - z * se
     ci_ub = ub + z * se
     return ci_lb, ci_ub
@@ -909,6 +957,7 @@ def _compute_clf_ci(
     max_pre_violation: float,
     alpha: float = 0.05,
     n_draws: int = 1000,
+    df: Optional[int] = None,
 ) -> Tuple[float, float, float, float]:
     """
     Compute Conditional Least Favorable (C-LF) confidence interval.
@@ -931,6 +980,8 @@ def _compute_clf_ci(
         Significance level.
     n_draws : int
         Number of Monte Carlo draws for conditional CI.
+    df : int, optional
+        Degrees of freedom for t-distribution critical value.
 
     Returns
     -------
@@ -956,7 +1007,7 @@ def _compute_clf_ci(
     ub = theta + bound
 
     # CI with estimation uncertainty
-    z = stats.norm.ppf(1 - alpha / 2)
+    z = _get_critical_value(alpha, df)
     ci_lb = lb - z * se
     ci_ub = ub + z * se
 
@@ -1086,7 +1137,7 @@ class HonestDiD:
         M = M if M is not None else self.M
 
         # Extract event study parameters
-        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods) = (
+        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, df_survey) = (
             _extract_event_study_params(results)
         )
 
@@ -1137,21 +1188,40 @@ class HonestDiD:
         # Compute bounds based on method
         if self.method == "smoothness":
             lb, ub, ci_lb, ci_ub = self._compute_smoothness_bounds(
-                beta_post, sigma_post, l_vec, num_pre, num_post, M
+                beta_post, sigma_post, l_vec, num_pre, num_post, M, df=df_survey
             )
             ci_method = "FLCI"
 
         elif self.method == "relative_magnitude":
             lb, ub, ci_lb, ci_ub = self._compute_rm_bounds(
-                beta_post, sigma_post, l_vec, num_pre, num_post, M, pre_periods, results
+                beta_post,
+                sigma_post,
+                l_vec,
+                num_pre,
+                num_post,
+                M,
+                pre_periods,
+                results,
+                df=df_survey,
             )
             ci_method = "C-LF"
 
         else:  # combined
             lb, ub, ci_lb, ci_ub = self._compute_combined_bounds(
-                beta_post, sigma_post, l_vec, num_pre, num_post, M, pre_periods, results
+                beta_post,
+                sigma_post,
+                l_vec,
+                num_pre,
+                num_post,
+                M,
+                pre_periods,
+                results,
+                df=df_survey,
             )
             ci_method = "FLCI"
+
+        # Extract survey_metadata for storage on results
+        survey_metadata = getattr(results, "survey_metadata", None)
 
         return HonestDiDResults(
             lb=lb,
@@ -1165,6 +1235,8 @@ class HonestDiD:
             alpha=self.alpha,
             ci_method=ci_method,
             original_results=results,
+            survey_metadata=survey_metadata,
+            df_survey=df_survey,
         )
 
     def _compute_smoothness_bounds(
@@ -1175,6 +1247,7 @@ class HonestDiD:
         num_pre: int,
         num_post: int,
         M: float,
+        df: Optional[int] = None,
     ) -> Tuple[float, float, float, float]:
         """Compute bounds under smoothness restriction."""
         # Construct constraints
@@ -1185,7 +1258,7 @@ class HonestDiD:
 
         # Compute FLCI
         se = np.sqrt(l_vec @ sigma_post @ l_vec)
-        ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha)
+        ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
 
         return lb, ub, ci_lb, ci_ub
 
@@ -1199,6 +1272,7 @@ class HonestDiD:
         Mbar: float,
         pre_periods: List,
         results: Any,
+        df: Optional[int] = None,
     ) -> Tuple[float, float, float, float]:
         """Compute bounds under relative magnitudes restriction."""
         # Estimate max pre-period violation from pre-trends
@@ -1209,12 +1283,18 @@ class HonestDiD:
             # No pre-period violations detected - use point estimate
             theta = np.dot(l_vec, beta_post)
             se = np.sqrt(l_vec @ sigma_post @ l_vec)
-            z = stats.norm.ppf(1 - self.alpha / 2)
+            z = _get_critical_value(self.alpha, df)
             return theta, theta, theta - z * se, theta + z * se
 
         # Compute bounds
         lb, ub, ci_lb, ci_ub = _compute_clf_ci(
-            beta_post, sigma_post, l_vec, Mbar, max_pre_violation, self.alpha
+            beta_post,
+            sigma_post,
+            l_vec,
+            Mbar,
+            max_pre_violation,
+            self.alpha,
+            df=df,
         )
 
         return lb, ub, ci_lb, ci_ub
@@ -1229,16 +1309,17 @@ class HonestDiD:
         M: float,
         pre_periods: List,
         results: Any,
+        df: Optional[int] = None,
     ) -> Tuple[float, float, float, float]:
         """Compute bounds under combined smoothness + RM restriction."""
         # Get smoothness bounds
         lb_sd, ub_sd, _, _ = self._compute_smoothness_bounds(
-            beta_post, sigma_post, l_vec, num_pre, num_post, M
+            beta_post, sigma_post, l_vec, num_pre, num_post, M, df=df
         )
 
         # Get RM bounds (use M as Mbar for combined)
         lb_rm, ub_rm, _, _ = self._compute_rm_bounds(
-            beta_post, sigma_post, l_vec, num_pre, num_post, M, pre_periods, results
+            beta_post, sigma_post, l_vec, num_pre, num_post, M, pre_periods, results, df=df
         )
 
         # Combined bounds are intersection
@@ -1252,7 +1333,7 @@ class HonestDiD:
 
         # Compute FLCI on combined bounds
         se = np.sqrt(l_vec @ sigma_post @ l_vec)
-        ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha)
+        ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
 
         return lb, ub, ci_lb, ci_ub
 

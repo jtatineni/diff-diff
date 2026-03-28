@@ -1,0 +1,351 @@
+"""Tests for Phase 7b: CallawaySantAnna repeated cross-section support.
+
+Covers: panel=False mode with reg/ipw/dr, covariates, survey weights,
+aggregation, bootstrap, control group options, base period options,
+and edge cases.
+"""
+
+import numpy as np
+import pytest
+
+from diff_diff import CallawaySantAnna, SurveyDesign, generate_staggered_data
+
+# =============================================================================
+# Fixtures
+# =============================================================================
+
+
+@pytest.fixture(scope="module")
+def rc_data():
+    """Basic repeated cross-section data."""
+    return generate_staggered_data(n_units=200, n_periods=6, panel=False, seed=42)
+
+
+@pytest.fixture(scope="module")
+def rc_data_with_covariates():
+    """RCS data with a covariate."""
+    data = generate_staggered_data(n_units=200, n_periods=6, panel=False, seed=42)
+    rng = np.random.default_rng(42)
+    data["x1"] = rng.normal(0, 1, len(data))
+    return data
+
+
+@pytest.fixture(scope="module")
+def rc_data_with_survey():
+    """RCS data with survey weights."""
+    data = generate_staggered_data(n_units=200, n_periods=6, panel=False, seed=42)
+    rng = np.random.default_rng(42)
+    data["x1"] = rng.normal(0, 1, len(data))
+    data["weight"] = rng.uniform(0.5, 2.0, len(data))
+    return data
+
+
+# =============================================================================
+# Basic Fit
+# =============================================================================
+
+
+class TestBasicFit:
+    """Basic repeated cross-section fit tests."""
+
+    def test_basic_reg(self, rc_data):
+        result = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_all_methods(self, rc_data, method):
+        result = CallawaySantAnna(estimation_method=method, panel=False).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
+
+    def test_panel_param_in_get_params(self):
+        cs = CallawaySantAnna(panel=False)
+        params = cs.get_params()
+        assert params["panel"] is False
+
+
+# =============================================================================
+# Methods Agree Without Covariates
+# =============================================================================
+
+
+class TestMethodsAgreeNoCovariates:
+    """Without covariates, reg/ipw/dr should give identical ATTs in RCS."""
+
+    def test_no_covariate_methods_agree(self, rc_data):
+        results = {}
+        for method in ["reg", "ipw", "dr"]:
+            r = CallawaySantAnna(estimation_method=method, panel=False).fit(
+                rc_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+            )
+            results[method] = r.overall_att
+
+        np.testing.assert_allclose(results["reg"], results["ipw"], atol=1e-10)
+        np.testing.assert_allclose(results["reg"], results["dr"], atol=1e-10)
+
+
+# =============================================================================
+# Treatment Effect Recovery
+# =============================================================================
+
+
+class TestTreatmentEffectRecovery:
+    """Known DGP should recover approximately correct treatment effect."""
+
+    def test_positive_effect(self, rc_data):
+        result = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        # DGP has treatment_effect=2.0 by default
+        assert result.overall_att > 0
+        assert abs(result.overall_att - 2.0) < 2.0  # within 2 SE roughly
+
+
+# =============================================================================
+# Aggregation
+# =============================================================================
+
+
+class TestAggregation:
+    """Aggregation types work with RCS."""
+
+    @pytest.mark.parametrize("agg", ["simple", "event_study", "group"])
+    def test_aggregation(self, rc_data, agg):
+        result = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate=agg,
+        )
+        assert np.isfinite(result.overall_att)
+        if agg == "event_study":
+            assert result.event_study_effects is not None
+            for e, info in result.event_study_effects.items():
+                if info["n_groups"] > 0:
+                    assert np.isfinite(info["effect"])
+        if agg == "group":
+            assert result.group_effects is not None
+
+
+# =============================================================================
+# Covariates
+# =============================================================================
+
+
+class TestCovariates:
+    """Covariate-adjusted estimation in RCS."""
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_with_covariates(self, rc_data_with_covariates, method):
+        result = CallawaySantAnna(estimation_method=method, panel=False).fit(
+            rc_data_with_covariates,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
+
+
+# =============================================================================
+# Survey Weights
+# =============================================================================
+
+
+class TestSurveyWeights:
+    """Survey weights work with RCS (per-observation)."""
+
+    def test_survey_weights_pweight(self, rc_data_with_survey):
+        sd = SurveyDesign(weights="weight")
+        result = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            rc_data_with_survey,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
+    def test_survey_covariates_dr(self, rc_data_with_survey):
+        """Combined: survey + covariates + DR + RCS."""
+        sd = SurveyDesign(weights="weight")
+        result = CallawaySantAnna(estimation_method="dr", panel=False).fit(
+            rc_data_with_survey,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
+
+
+# =============================================================================
+# Control Group Options
+# =============================================================================
+
+
+class TestControlGroup:
+    """Control group options work with RCS."""
+
+    def test_not_yet_treated(self, rc_data):
+        result = CallawaySantAnna(
+            estimation_method="reg", panel=False, control_group="not_yet_treated"
+        ).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert np.isfinite(result.overall_att)
+
+    def test_never_treated(self, rc_data):
+        result = CallawaySantAnna(
+            estimation_method="reg", panel=False, control_group="never_treated"
+        ).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert np.isfinite(result.overall_att)
+
+
+# =============================================================================
+# Base Period Options
+# =============================================================================
+
+
+class TestBasePeriod:
+    """Base period options work with RCS."""
+
+    def test_universal(self, rc_data):
+        result = CallawaySantAnna(
+            estimation_method="reg", panel=False, base_period="universal"
+        ).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert np.isfinite(result.overall_att)
+
+    def test_varying(self, rc_data):
+        result = CallawaySantAnna(estimation_method="reg", panel=False, base_period="varying").fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert np.isfinite(result.overall_att)
+
+
+# =============================================================================
+# Bootstrap
+# =============================================================================
+
+
+class TestBootstrap:
+    """Bootstrap works with RCS."""
+
+    def test_bootstrap_reg(self, rc_data):
+        result = CallawaySantAnna(
+            estimation_method="reg", panel=False, n_bootstrap=49, seed=42
+        ).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert result.bootstrap_results is not None
+        assert np.isfinite(result.overall_att)
+
+
+# =============================================================================
+# Data Generator
+# =============================================================================
+
+
+class TestDataGenerator:
+    """Test the RCS data generator."""
+
+    def test_rc_data_structure(self):
+        data = generate_staggered_data(n_units=100, n_periods=5, panel=False, seed=99)
+        # Each observation should have a unique unit ID
+        assert data["unit"].nunique() == len(data)
+        # Should have n_units * n_periods rows
+        assert len(data) == 100 * 5
+        # Each period should have n_units observations
+        assert all(data.groupby("period")["unit"].count() == 100)
+
+    def test_panel_data_unchanged(self):
+        """panel=True (default) should produce panel data."""
+        data = generate_staggered_data(n_units=50, n_periods=4, panel=True, seed=42)
+        # Units should repeat across periods
+        assert data["unit"].nunique() < len(data)
+        assert data["unit"].nunique() == 50
+
+
+# =============================================================================
+# Edge Cases
+# =============================================================================
+
+
+class TestEdgeCases:
+    """Edge cases for RCS."""
+
+    def test_empty_cell_nan(self):
+        """(g,t) cell with no observations should be NaN, not crash."""
+        data = generate_staggered_data(n_units=50, n_periods=4, panel=False, seed=42)
+        # This should handle cells with few/no observations gracefully
+        result = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        # Should produce at least some finite effects
+        finite_effects = [
+            v["effect"] for v in result.group_time_effects.values() if np.isfinite(v["effect"])
+        ]
+        assert len(finite_effects) > 0
