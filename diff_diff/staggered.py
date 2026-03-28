@@ -874,6 +874,12 @@ class CallawaySantAnna(
         # Batch inference for all (g,t) pairs at once
         if task_keys:
             df_survey_val = precomputed.get("df_survey")
+            # Guard: replicate design with undefined df → NaN inference
+            if (df_survey_val is None
+                    and precomputed.get("resolved_survey_unit") is not None
+                    and hasattr(precomputed["resolved_survey_unit"], 'uses_replicate_variance')
+                    and precomputed["resolved_survey_unit"].uses_replicate_variance):
+                df_survey_val = 0
             t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
                 np.array(atts),
                 np.array(ses),
@@ -1503,6 +1509,11 @@ class CallawaySantAnna(
         if df_survey is not None and survey_metadata is not None:
             if survey_metadata.df_survey != df_survey:
                 survey_metadata.df_survey = df_survey
+        # Guard: replicate design with undefined df (rank <= 1) → NaN inference
+        if (df_survey is None and resolved_survey is not None
+                and hasattr(resolved_survey, 'uses_replicate_variance')
+                and resolved_survey.uses_replicate_variance):
+            df_survey = 0
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att,
             overall_se,

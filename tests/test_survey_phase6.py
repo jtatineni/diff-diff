@@ -973,10 +973,13 @@ class TestReplicateEdgeCases:
             replicate_method="BRR", n_replicates=R,
             combined_weights=False,
         )
-        # df should match rank of analysis weights (rep * full-sample)
+        # df should match pivoted QR rank of analysis weights
         analysis_weights = rep_factors * weights[:, np.newaxis]
-        expected_rank = int(np.linalg.matrix_rank(analysis_weights))
-        expected_df = max(expected_rank - 1, 1)
+        from scipy.linalg import qr as scipy_qr
+        _, R_mat, _ = scipy_qr(analysis_weights, pivoting=True, mode='economic')
+        diag_abs = np.abs(np.diag(R_mat))
+        expected_rank = int(np.sum(diag_abs > 1e-5 * diag_abs.max()))
+        expected_df = expected_rank - 1 if expected_rank > 1 else None
         assert resolved.df_survey == expected_df
 
         # Verify it differs from raw perturbation-factor rank when weights
@@ -991,13 +994,12 @@ class TestReplicateEdgeCases:
             replicate_method="BRR", n_replicates=R,
             combined_weights=False,
         )
-        raw_rank = int(np.linalg.matrix_rank(rep_factors))
-        analysis_rank = int(np.linalg.matrix_rank(
-            rep_factors * weights_with_zeros[:, np.newaxis]
-        ))
-        # Analysis rank should be <= raw rank when zero weights present
-        assert analysis_rank <= raw_rank
-        assert resolved2.df_survey == max(analysis_rank - 1, 1)
+        analysis_z = rep_factors * weights_with_zeros[:, np.newaxis]
+        _, R_z, _ = scipy_qr(analysis_z, pivoting=True, mode='economic')
+        diag_z = np.abs(np.diag(R_z))
+        z_rank = int(np.sum(diag_z > 1e-5 * diag_z.max())) if diag_z.max() > 0 else 0
+        z_df = z_rank - 1 if z_rank > 1 else None
+        assert resolved2.df_survey == z_df
 
     def test_rscales_zero_centering_vcov(self):
         """mse=False with zero rscales: center only on rscales > 0 replicates."""
@@ -1100,6 +1102,34 @@ class TestReplicateEdgeCases:
         var_manual = float(np.sum(rscales * diffs**2))
 
         assert var == pytest.approx(var_manual, rel=1e-10)
+
+    def test_rank_one_replicate_nan_inference(self):
+        """Rank-1 replicate design yields df_survey=None and NaN inference."""
+        from diff_diff.survey import ResolvedSurveyDesign
+        from diff_diff.utils import safe_inference
+
+        np.random.seed(42)
+        n = 50
+        R = 3
+        weights = np.ones(n)
+        # All replicate columns identical → rank 1
+        col = 1.0 + np.random.randn(n) * 0.1
+        rep_arr = np.column_stack([col, col, col])
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+            replicate_weights=rep_arr,
+            replicate_method="JK1", n_replicates=R,
+        )
+        # Rank-1 → df_survey should be None
+        assert resolved.df_survey is None
+
+        # Passing df=0 (the guard value) should produce NaN p-value and CI
+        _, p_val, ci = safe_inference(1.0, 0.5, df=0)
+        assert np.isnan(p_val)
+        assert np.isnan(ci[0]) and np.isnan(ci[1])
 
 
 # =============================================================================

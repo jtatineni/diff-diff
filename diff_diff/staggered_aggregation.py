@@ -617,6 +617,12 @@ class CallawaySantAnnaAggregationMixin:
         if not agg_effects_list:
             return {}
         df_survey_val = precomputed.get("df_survey") if precomputed is not None else None
+        # Guard: replicate design with undefined df → NaN inference
+        if (df_survey_val is None and precomputed is not None
+                and precomputed.get("resolved_survey_unit") is not None
+                and hasattr(precomputed["resolved_survey_unit"], 'uses_replicate_variance')
+                and precomputed["resolved_survey_unit"].uses_replicate_variance):
+            df_survey_val = 0
         t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
             np.array(agg_effects_list),
             np.array(agg_ses_list),
@@ -710,6 +716,12 @@ class CallawaySantAnnaAggregationMixin:
         agg_effects = np.array([x[1] for x in group_data_list])
         agg_ses = np.array([x[2] for x in group_data_list])
         df_survey_val = precomputed.get("df_survey") if precomputed is not None else None
+        # Guard: replicate design with undefined df → NaN inference
+        if (df_survey_val is None and precomputed is not None
+                and precomputed.get("resolved_survey_unit") is not None
+                and hasattr(precomputed["resolved_survey_unit"], 'uses_replicate_variance')
+                and precomputed["resolved_survey_unit"].uses_replicate_variance):
+            df_survey_val = 0
         t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
             agg_effects,
             agg_ses,

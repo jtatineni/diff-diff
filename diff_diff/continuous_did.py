@@ -516,6 +516,11 @@ class ContinuousDiD:
 
                 # Survey df for t-distribution inference (unit-level, not panel-level)
                 _survey_df = analytic.get("df_survey")
+                # Guard: replicate design with undefined df → NaN inference
+                if (_survey_df is None and resolved_survey is not None
+                        and hasattr(resolved_survey, 'uses_replicate_variance')
+                        and resolved_survey.uses_replicate_variance):
+                    _survey_df = 0
 
                 # Recompute survey_metadata from unit-level design so reported
                 # effective_n/n_psu/df_survey match the inference actually run

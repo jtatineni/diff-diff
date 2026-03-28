@@ -373,6 +373,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
         # Store survey df for safe_inference calls (t-distribution with survey df)
         self._survey_df = survey_metadata.df_survey if survey_metadata is not None else None
+        # Guard: replicate design with undefined df → NaN inference
+        if (self._survey_df is None and resolved_survey is not None
+                and hasattr(resolved_survey, 'uses_replicate_variance')
+                and resolved_survey.uses_replicate_variance):
+            self._survey_df = 0
 
         # Bootstrap + survey supported via PSU-level multiplier bootstrap.
 
