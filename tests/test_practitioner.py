@@ -190,6 +190,24 @@ class TestReturnSchema:
         output = practitioner_next_steps(did_results, verbose=False)
         assert "estimation" in output["completed"]
 
+    def test_steps_1_and_2_always_emitted(self, did_results):
+        """Steps 1 (target parameter) and 2 (assumptions) should always appear."""
+        output = practitioner_next_steps(did_results, verbose=False)
+        baker_steps = [s["baker_step"] for s in output["next_steps"]]
+        assert 1 in baker_steps, "Step 1 (target parameter) missing"
+        assert 2 in baker_steps, "Step 2 (assumptions) missing"
+
+    def test_steps_1_and_2_filterable(self, did_results):
+        """Agents can filter Steps 1-2 via completed_steps."""
+        output = practitioner_next_steps(
+            did_results,
+            completed_steps=["target_parameter", "assumptions"],
+            verbose=False,
+        )
+        baker_steps = [s["baker_step"] for s in output["next_steps"]]
+        assert 1 not in baker_steps
+        assert 2 not in baker_steps
+
     def test_next_steps_are_dicts(self, did_results):
         output = practitioner_next_steps(did_results, verbose=False)
         for step in output["next_steps"]:
@@ -235,6 +253,9 @@ class TestResultTypeDispatch:
         output = practitioner_next_steps(mock_sa_results, verbose=False)
         assert len(output["next_steps"]) > 0
         assert output["estimator"] == "SunAbraham"
+        # SA guidance should use to_dataframe, NOT aggregate='group'
+        all_code = " ".join(s.get("code", "") for s in output["next_steps"])
+        assert "aggregate=" not in all_code or "to_dataframe" in all_code
 
     def test_imputation_results(self, mock_imputation_results):
         output = practitioner_next_steps(mock_imputation_results, verbose=False)
@@ -261,18 +282,20 @@ class TestResultTypeDispatch:
         output = practitioner_next_steps(mock_synth_results, verbose=False)
         assert len(output["next_steps"]) > 0
         assert output["estimator"] == "SyntheticDiD"
-        # SDiD should NOT get staggered-specific guidance
-        all_text = " ".join(s.get("code", "") + s.get("why", "") for s in output["next_steps"])
-        assert "control_group" not in all_text
-        assert "anticipation" not in all_text
+        # SDiD handler steps (exclude generic Steps 1-2) should NOT use staggered knobs
+        handler_steps = [s for s in output["next_steps"] if s["baker_step"] > 2]
+        all_code = " ".join(s.get("code", "") for s in handler_steps)
+        assert "control_group" not in all_code
+        assert "anticipation" not in all_code
 
     def test_trop_results(self, mock_trop_results):
         output = practitioner_next_steps(mock_trop_results, verbose=False)
         assert len(output["next_steps"]) > 0
-        # TROP should NOT get staggered-specific guidance
-        all_text = " ".join(s.get("code", "") + s.get("why", "") for s in output["next_steps"])
-        assert "control_group" not in all_text
-        assert "anticipation" not in all_text
+        # TROP handler steps (exclude generic Steps 1-2) should NOT use staggered knobs
+        handler_steps = [s for s in output["next_steps"] if s["baker_step"] > 2]
+        all_code = " ".join(s.get("code", "") for s in handler_steps)
+        assert "control_group" not in all_code
+        assert "anticipation" not in all_code
 
     def test_efficient_results(self, mock_efficient_results):
         output = practitioner_next_steps(mock_efficient_results, verbose=False)

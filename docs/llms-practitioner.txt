@@ -506,5 +506,6 @@ guidance = practitioner_next_steps(results)
 
 ## References
 
-Baker, A., Larcker, D. F., & Wang, C. C. Y. (2025). Difference-in-Differences
-Designs: A Practitioner's Guide. arXiv:2503.13323.
+Baker, A., Callaway, B., Cunningham, S., Goodman-Bacon, A., & Sant'Anna, P.
+H. C. (2025). Difference-in-Differences Designs: A Practitioner's Guide.
+arXiv:2503.13323.

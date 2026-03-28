@@ -94,6 +94,36 @@ def practitioner_next_steps(
     handler = _HANDLERS.get(type_name, _handle_generic)
     steps, warnings = handler(results)
 
+    # Prepend Steps 1-2 (pre-estimation reasoning) to every handler's output.
+    # These are always relevant and filterable via completed_steps.
+    pre_estimation = [
+        _step(
+            baker_step=1,
+            label="Define target parameter",
+            why=(
+                "State explicitly what causal effect you are estimating "
+                "(ATT, ATT(g,t), weighted/unweighted) and what policy "
+                "question it answers."
+            ),
+            code="# What is the target parameter? ATT? Weighted or unweighted?",
+            priority="high",
+            step_name="target_parameter",
+        ),
+        _step(
+            baker_step=2,
+            label="State identification assumptions",
+            why=(
+                "Name the parallel trends variant you are invoking "
+                "(unconditional, conditional, PT-GT-NYT, etc.), the "
+                "no-anticipation assumption, and any overlap conditions."
+            ),
+            code="# Which PT variant? No-anticipation? Overlap?",
+            priority="high",
+            step_name="assumptions",
+        ),
+    ]
+    steps = pre_estimation + steps
+
     # Filter out completed steps
     steps = _filter_steps(steps, completed)
 
