@@ -574,22 +574,28 @@ class ResolvedSurveyDesign:
     def df_survey(self) -> Optional[int]:
         """Survey degrees of freedom.
 
-        For replicate designs: numerical rank of centered replicate weight
-        matrix, matching R's ``survey::degf()``. For TSL: n_PSU - n_strata.
+        For replicate designs: QR-rank of the analysis-weight matrix minus 1,
+        matching R's ``survey::degf()`` which uses ``qr(..., tol=1e-5)$rank``.
+        Returns ``None`` when rank <= 1 (insufficient for t-based inference).
+        For TSL: n_PSU - n_strata.
         """
         if self.uses_replicate_variance:
             if self.replicate_weights is None or self.n_replicates < 2:
                 return None
-            # Rank-based df from analysis-weight matrix, matching
-            # R's survey::degf() which uses weights(design, "analysis").
+            # QR-rank of analysis-weight matrix, matching R's survey::degf()
+            # which uses qr(weights(design, "analysis"), tol=1e-5)$rank.
             # For combined_weights=True, replicate cols ARE analysis weights.
             # For combined_weights=False, analysis weights = rep * full-sample.
             if self.combined_weights:
                 analysis_weights = self.replicate_weights
             else:
                 analysis_weights = self.replicate_weights * self.weights[:, np.newaxis]
-            rank = int(np.linalg.matrix_rank(analysis_weights))
-            return max(rank - 1, 1) if rank > 1 else None
+            # Use QR decomposition with R-compatible tolerance (1e-5)
+            Q, R_mat = np.linalg.qr(analysis_weights, mode='reduced')
+            tol = 1e-5
+            rank = int(np.sum(np.abs(np.diag(R_mat)) > tol * np.abs(np.diag(R_mat)).max()))
+            df = rank - 1
+            return df if df > 0 else None
         if self.psu is not None and self.n_psu > 0:
             if self.strata is not None and self.n_strata > 0:
                 return self.n_psu - self.n_strata

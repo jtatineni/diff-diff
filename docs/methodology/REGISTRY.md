@@ -2011,11 +2011,12 @@ variance from the distribution of replicate estimates.
   contrasts are formed via weight-ratio rescaling:
   `theta_r = sum((w_r/w_full) * psi)` when `combined_weights=True`,
   `theta_r = sum(w_r * psi)` when `combined_weights=False`.
-- **Survey df**: Numerical rank of the analysis-weight matrix minus 1,
-  matching R's `survey::degf()`. For `combined_weights=True` (default),
-  analysis weights are the raw replicate columns. For `combined_weights=False`,
-  analysis weights are `replicate_weights * full_sample_weights`.
-  Replaces `n_PSU - n_strata`.
+- **Survey df**: QR-rank of the analysis-weight matrix minus 1,
+  matching R's `survey::degf()` which uses `qr(..., tol=1e-5)$rank`.
+  For `combined_weights=True` (default), analysis weights are the raw
+  replicate columns. For `combined_weights=False`, analysis weights are
+  `replicate_weights * full_sample_weights`. Returns `None` (undefined)
+  when rank <= 1, yielding NaN inference. Replaces `n_PSU - n_strata`.
 - **Mutual exclusion**: Replicate weights cannot be combined with
   strata/psu/fpc (the replicates encode design structure implicitly)
 - **Design parameters** (matching R `svrepdesign()`):
