@@ -1885,7 +1885,7 @@ class LinearRegression:
         DEFFDiagnostics
         """
         self._check_fitted()
-        if self.survey_df_ is None:
+        if not (hasattr(self, 'survey_design') and self.survey_design is not None):
             raise ValueError(
                 "compute_deff() requires a survey design. "
                 "Fit with survey_design= first."

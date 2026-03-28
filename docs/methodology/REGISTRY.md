@@ -1907,9 +1907,9 @@ unequal selection probabilities).
 - **Note:** pweight HC1 meat uses score outer products (Σ s_i s_i' where
   s_i = w_i x_i u_i), giving w² in the meat. fweight HC1 meat uses
   X'diag(w u²)X (one power of w), matching frequency-expanded HC1.
-- **Note:** fweights must be positive integers; fractional values are
-  rejected by `_validate_weights()`. This matches Stata's convention and
-  avoids ambiguous frequency semantics.
+- **Note:** fweights must be non-negative integers; fractional values are
+  rejected by `_validate_weights()`. All-zero vectors rejected at solver
+  level. This matches Stata's convention.
 
 ### Absorbed Fixed Effects with Survey Weights
 
@@ -2049,11 +2049,11 @@ variance from the distribution of replicate estimates.
   - **Supported**: CallawaySantAnna (reg, no bootstrap), ContinuousDiD
     (no bootstrap), EfficientDiD (no bootstrap), TripleDifference (all
     methods), LinearRegression (OLS path)
-  - **Rejected with NotImplementedError**: SunAbraham (within-transformation
-    must be recomputed per replicate), DifferenceInDifferences,
-    MultiPeriodDiD, StackedDiD (use compute_survey_vcov directly),
-    ImputationDiD, TwoStageDiD (custom variance), SyntheticDiD, TROP
-    (bootstrap-based variance)
+  - **Rejected with NotImplementedError**: SunAbraham, TwoWayFixedEffects
+    (within-transformation must be recomputed per replicate),
+    DifferenceInDifferences, MultiPeriodDiD, StackedDiD (use
+    compute_survey_vcov directly), ImputationDiD, TwoStageDiD (custom
+    variance), SyntheticDiD, TROP (bootstrap-based variance)
   - CS/ContinuousDiD/EfficientDiD reject replicate + `n_bootstrap > 0`
     (replicate weights provide analytical variance)
 - **Note:** When invalid replicates are dropped in `compute_replicate_vcov`
