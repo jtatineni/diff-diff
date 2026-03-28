@@ -42,12 +42,20 @@ results.att          # ATT
 results.se           # Standard error
 results.conf_int     # Confidence interval
 
-# Staggered estimators (CallawaySantAnna, SunAbraham, ImputationDiD, etc.):
+# CallawaySantAnna (with aggregate parameter):
 results.overall_att       # Overall ATT
 results.overall_se        # Standard error
-results.overall_conf_int  # Confidence interval
-results.group_effects     # Per-cohort ATTs (if aggregate='group' or 'all')
-results.event_study_effects  # Dynamic effects (if aggregate='event_study' or 'all')
+results.group_effects     # Per-cohort ATTs (aggregate='group' or 'all')
+results.event_study_effects  # Dynamic effects (aggregate='event_study' or 'all')
+
+# SunAbraham (no aggregate parameter — effects computed automatically):
+results.overall_att           # Overall ATT
+results.event_study_effects   # Dynamic effects by relative period
+results.cohort_effects        # Per-cohort effects (via to_dataframe(level='cohort'))
+
+# Other staggered (ImputationDiD, TwoStageDiD, etc.):
+results.overall_att       # Overall ATT
+results.overall_se        # Standard error
 ```
 
 ---
@@ -293,7 +301,7 @@ estimate is contaminated by forbidden comparisons (see Step 4).
 
 Aggregate treatment effects may mask important variation.
 
-### For staggered estimators (CS, SA, etc.)
+### For CallawaySantAnna (and estimators with `aggregate` parameter)
 ```python
 # Group-level effects — do early vs late adopters differ?
 results = cs.fit(data, ..., aggregate='group')
@@ -306,6 +314,17 @@ print(results.event_study_effects)  # Per-relative-period ATTs
 
 # All aggregations at once
 results = cs.fit(data, ..., aggregate='all')
+```
+
+### For SunAbraham (no `aggregate` parameter)
+SA computes event-study and cohort effects automatically during `fit()`:
+```python
+sa = SunAbraham()
+results = sa.fit(data, ...)
+# Event-study effects (dynamic):
+es_df = results.to_dataframe(level='event_study')
+# Cohort-specific effects:
+cohort_df = results.to_dataframe(level='cohort')
 ```
 
 ### Subgroup analysis

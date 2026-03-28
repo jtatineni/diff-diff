@@ -344,6 +344,23 @@ def _handle_sa(results: Any):
             priority="medium",
             step_name="sensitivity",
         ),
+        _step(
+            baker_step=7,
+            label="Examine event-study and cohort effects",
+            why=(
+                "SunAbraham results include event_study_effects (dynamic "
+                "effects by relative period) and cohort_effects (per-cohort "
+                "effects). Note: SA does not have an aggregate parameter — "
+                "these are computed automatically during fit()."
+            ),
+            code=(
+                "# SA event-study effects:\n"
+                "sa_es_df = results.to_dataframe(level='event_study')\n"
+                "# SA cohort effects:\n"
+                "sa_cohort_df = results.to_dataframe(level='cohort')"
+            ),
+            step_name="heterogeneity",
+        ),
         _robustness_compare_step("CS, BJS, or Gardner"),
         _covariates_step(),
     ]
