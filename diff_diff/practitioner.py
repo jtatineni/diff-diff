@@ -281,7 +281,7 @@ def _covariates_step() -> Dict[str, Any]:
 def _handle_did(results: Any):
     steps = [
         _parallel_trends_step(),
-        _placebo_step(),
+        _placebo_step(),  # valid: basic 2x2 DiD with binary time
         _step(
             baker_step=4,
             label="Check if data is actually staggered",
@@ -306,7 +306,8 @@ def _handle_multi_period(results: Any):
     steps = [
         _parallel_trends_step(),
         _honest_did_step(),
-        _placebo_step(),
+        # Note: run_all_placebo_tests() requires binary time indicator,
+        # which MultiPeriodDiD does not use. Omit placebo for this type.
         _robustness_compare_step("CS, SA, or BJS"),
     ]
     warnings = _check_nan_att(results)
