@@ -255,7 +255,7 @@ for test_name, result in placebo.items():
 
 ### Bacon decomposition (for TWFE users)
 If you used TWFE, always run BaconDecomposition to check whether the
-estimate is contaminated by forbidden comparisons (see Step 3).
+estimate is contaminated by forbidden comparisons (see Step 4).
 
 ---
 
@@ -389,16 +389,21 @@ data = load_mpdta()
 # Step 2: Assumptions — PT-GT-NYT (not-yet-treated parallel trends),
 #          no anticipation, doubly robust for conditional PT
 
-# Step 3: Estimator selection — staggered adoption → CS (primary), SA (robustness)
-# First, diagnose TWFE bias:
+# Step 3: Test parallel trends
+pt = check_parallel_trends(data, outcome='lemp', time='year',
+                           treatment_group='first_treat')
+print(f"Pre-trends p-value: {pt['p_value']:.4f}")
+
+# Step 4: Choose estimator — staggered adoption → CS (primary), SA (robustness)
+# Diagnose TWFE bias first:
 bacon = BaconDecomposition()
 bacon_result = bacon.fit(data, outcome='lemp', unit='countyreal',
                          time='year', first_treat='first_treat')
 print(bacon_result.summary())
 
-# Step 4: Inference — cluster at county level (treatment assignment unit)
-
-# Step 5: Estimate
+# Step 5: Estimate (cluster at county level — treatment assignment unit)
+n_clusters = data['countyreal'].nunique()
+print(f"Clusters: {n_clusters} -> {'cluster-robust SEs' if n_clusters >= 50 else 'wild bootstrap'}")
 cs = CallawaySantAnna(
     control_group='not_yet_treated', estimation_method='dr',
     cluster='countyreal',

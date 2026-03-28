@@ -591,10 +591,12 @@ _HANDLERS = {
 # ---------------------------------------------------------------------------
 def _check_nan_att(results: Any) -> List[str]:
     """Return warnings if ATT is NaN."""
-    # Check both .att (DiDResults) and .overall_att (staggered results)
+    # Check .att (DiDResults), .overall_att (staggered), .avg_att (MultiPeriod)
     att = getattr(results, "att", None)
     if att is None:
         att = getattr(results, "overall_att", None)
+    if att is None:
+        att = getattr(results, "avg_att", None)
     if att is not None and isinstance(att, float) and math.isnan(att):
         return [
             "Estimation produced NaN ATT — check data preparation and "

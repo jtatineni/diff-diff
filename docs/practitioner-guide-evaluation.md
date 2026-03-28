@@ -25,9 +25,9 @@ instances with no shared context.
 |------|-------------|---|---|---|
 | S1 | Define target parameter | Not mentioned | Mentions ATT types | Explicitly defines weighted/unweighted, policy question |
 | S2 | State assumptions | Not mentioned | Mentions parallel trends | Formally names PT variant (PT-GT-NYT etc.) |
-| S3 | Appropriate estimator | Uses naive TWFE | Uses CS but no diagnostic | CS + Bacon diagnostic, explains choice |
-| S4 | Inference approach | Not discussed | Clusters SEs | Clusters + discusses alternatives (wild bootstrap) |
-| S5 | Estimation | No code | Partial code | Complete, working code |
+| S3 | Test parallel trends | Not done | Informal check (event study eyeball) | Runs check_parallel_trends / equivalence_test_trends |
+| S4 | Choose estimator | Uses naive TWFE | Uses CS but no diagnostic | CS + Bacon diagnostic, explains choice |
+| S5 | Estimate (with cluster check) | No code | Partial code | Complete code with cluster count check |
 | S6 | Sensitivity analysis | Not done | Mentions but doesn't run | Runs HonestDiD and/or placebo tests |
 | S7 | Heterogeneity | Not done | Some aggregation | Group + event study + subgroup |
 | S8 | Robustness | Not done | Compares 2 estimators | 3+ estimators + with/without covariates |

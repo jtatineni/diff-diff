@@ -341,6 +341,15 @@ class TestNaNHandling:
         assert len(output["warnings"]) > 0
         assert any("NaN" in w for w in output["warnings"])
 
+    def test_nan_avg_att_multi_period(self):
+        """MultiPeriodDiDResults uses avg_att, not att."""
+        from diff_diff.results import MultiPeriodDiDResults
+
+        r = MultiPeriodDiDResults.__new__(MultiPeriodDiDResults)
+        r.avg_att = float("nan")
+        output = practitioner_next_steps(r, verbose=False)
+        assert any("NaN" in w for w in output["warnings"])
+
 
 # ---------------------------------------------------------------------------
 # Tests: Bacon handler warnings
