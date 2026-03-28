@@ -582,8 +582,10 @@ class TripleDifference:
         # When survey design is active, use survey df (n_PSU - n_strata)
         if survey_metadata is not None and survey_metadata.df_survey is not None:
             df = max(survey_metadata.df_survey, 1)
-            # Override with effective replicate df if available
-            if hasattr(self, '_replicate_n_valid') and self._replicate_n_valid is not None:
+            # Override with effective replicate df only when replicates were dropped
+            if (hasattr(self, '_replicate_n_valid') and self._replicate_n_valid is not None
+                    and resolved_survey is not None
+                    and self._replicate_n_valid < resolved_survey.n_replicates):
                 df = max(self._replicate_n_valid - 1, 1)
                 survey_metadata.df_survey = self._replicate_n_valid - 1
         else:

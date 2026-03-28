@@ -1334,12 +1334,13 @@ def solve_logit(
     # dropped in both the effective-sample check and the full-sample check
     if len(dropped_cols) > 0 or len(eff_dropped_original) > 0:
         # First expand from X_solve columns back to post-eff-drop columns
-        beta_post_eff = np.zeros(k)
+        # Use NaN for dropped coefficients (R convention: not estimable)
+        beta_post_eff = np.full(k, np.nan)
         beta_post_eff[kept_cols] = beta_solve
 
         # Then expand from post-eff-drop columns back to original columns
         if len(eff_dropped_original) > 0:
-            beta_full = np.zeros(k_original)
+            beta_full = np.full(k_original, np.nan)
             kept_original = [i for i in range(k_original) if i not in eff_dropped_original]
             beta_full[kept_original] = beta_post_eff
         else:
@@ -1819,8 +1820,11 @@ class LinearRegression:
                         X, y, coefficients, _effective_survey_design,
                         weight_type=self.weight_type,
                     )
-                # Store effective replicate df (n_valid - 1) for later use
-                self._replicate_df = _n_valid_rep - 1 if _n_valid_rep > 1 else None
+                # Store effective replicate df only when replicates were dropped
+                if _n_valid_rep < _effective_survey_design.n_replicates:
+                    self._replicate_df = _n_valid_rep - 1 if _n_valid_rep > 1 else None
+                else:
+                    self._replicate_df = None  # use rank-based df from design
             else:
                 from diff_diff.survey import compute_survey_vcov
 

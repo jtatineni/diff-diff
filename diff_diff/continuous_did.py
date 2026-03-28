@@ -1295,9 +1295,12 @@ class ContinuousDiD:
             acrt_d_se = np.sqrt(np.sum(if_acrt_d**2, axis=0))
 
         # Return unit-level survey df and resolved design for metadata recomputation
-        # Use effective replicate df if available (from _rep_se calls)
+        # Only override with n_valid-based df when replicates were actually dropped
         if resolved_survey is not None and hasattr(resolved_survey, 'uses_replicate_variance') and resolved_survey.uses_replicate_variance:
-            unit_df_survey = _rep_n_valid - 1 if _rep_n_valid > 1 else None
+            if _rep_n_valid < unit_resolved.n_replicates:
+                unit_df_survey = _rep_n_valid - 1 if _rep_n_valid > 1 else None
+            else:
+                unit_df_survey = unit_resolved.df_survey
         else:
             unit_df_survey = unit_resolved.df_survey if resolved_survey is not None else None
 
