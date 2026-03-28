@@ -1217,15 +1217,10 @@ def solve_logit(
                 f"outcome class(es). Logistic regression requires both 0 and 1 "
                 f"in the effective (positive-weight) sample."
             )
-        # Check rank on the effective sample, not the full padded design
+        # Check rank deficiency on positive-weight rows FIRST — full design
+        # may be full rank due to zero-weight padding. Drop columns before
+        # checking sample-size identification.
         X_eff = X_with_intercept[pos_mask]
-        if n_pos <= X_eff.shape[1]:
-            raise ValueError(
-                f"Only {n_pos} positive-weight observation(s) for "
-                f"{X_eff.shape[1]} parameters. Cannot identify logistic model."
-            )
-        # Check rank deficiency on positive-weight rows — full design may
-        # be full rank due to zero-weight padding.
         eff_rank_info = _detect_rank_deficiency(X_eff)
         if len(eff_rank_info[1]) > 0:
             n_dropped_eff = len(eff_rank_info[1])
@@ -1247,6 +1242,13 @@ def solve_logit(
             eff_dropped_original = list(eff_rank_info[1])
             X_with_intercept = np.delete(X_with_intercept, eff_rank_info[1], axis=1)
             k = X_with_intercept.shape[1]
+        # Check sample-size identification AFTER column dropping
+        if n_pos <= k:
+            raise ValueError(
+                f"Only {n_pos} positive-weight observation(s) for "
+                f"{k} parameters (after rank reduction). "
+                f"Cannot identify logistic model."
+            )
 
     # Check rank deficiency once before iterating (on possibly-shrunk matrix)
     rank_info = _detect_rank_deficiency(X_with_intercept)
