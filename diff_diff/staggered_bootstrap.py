@@ -237,8 +237,14 @@ class CallawaySantAnnaBootstrapMixin:
                     _cohort_mass_cache[g] = float(np.sum(survey_w[unit_cohorts == g]))
             all_n_treated = np.array([_cohort_mass_cache[gt[0]] for gt in gt_pairs], dtype=float)
         else:
+            # Use agg_weight if available (RCS: fixed cohort mass);
+            # fall back to n_treated for panel data
             all_n_treated = np.array(
-                [group_time_effects[gt]["n_treated"] for gt in gt_pairs], dtype=float
+                [
+                    group_time_effects[gt].get("agg_weight", group_time_effects[gt]["n_treated"])
+                    for gt in gt_pairs
+                ],
+                dtype=float,
             )
         post_n_treated = all_n_treated[post_treatment_mask]
 
@@ -572,7 +578,10 @@ class CallawaySantAnnaBootstrapMixin:
                 if g not in _cohort_mass:
                     _cohort_mass[g] = float(np.sum(survey_w[unit_cohorts == g]))
                 return _cohort_mass[g]
-            return group_time_effects[(g, t)]["n_treated"]
+            # Use agg_weight if available (RCS: fixed cohort mass)
+            return group_time_effects[(g, t)].get(
+                "agg_weight", group_time_effects[(g, t)]["n_treated"]
+            )
 
         # Organize by relative time
         effects_by_e: Dict[int, List[Tuple[int, float, float]]] = {}

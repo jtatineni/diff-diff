@@ -1320,6 +1320,9 @@ class CallawaySantAnna(
         if not (0 < self.pscore_trim < 0.5):
             raise ValueError(f"pscore_trim must be in (0, 0.5), got {self.pscore_trim}")
 
+        # Reset stale state from prior fit (prevents leaking event-study VCV)
+        self._event_study_vcov = None
+
         # Normalize empty covariates list to None
         if covariates is not None and len(covariates) == 0:
             covariates = None
