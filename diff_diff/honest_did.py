@@ -699,10 +699,21 @@ def _extract_event_study_params(
                 else:
                     sigma = np.diag(np.array(ses) ** 2)
 
-                # Validate pre and post blocks are each consecutive
-                # (the gap between last pre and first post is the omitted
-                # reference period and is expected)
-                has_gap = False
+                # Validate the full event-time grid is consecutive around
+                # the omitted reference period (exactly one gap allowed).
+                # R's HonestDiD refuses non-consecutive grids.
+                if pre_times and post_times:
+                    # Expected: pre_times[-1] + 1 = reference, reference + 1 = post_times[0]
+                    # So post_times[0] - pre_times[-1] should be exactly 2
+                    ref_gap = post_times[0] - pre_times[-1]
+                    has_gap = ref_gap != 2
+                elif pre_times:
+                    has_gap = False  # only pre, no ref gap to check
+                elif post_times:
+                    has_gap = False  # only post, no ref gap to check
+                else:
+                    has_gap = False
+                # Also check within-block consecutiveness
                 for block in [pre_times, post_times]:
                     if len(block) >= 2:
                         for i in range(len(block) - 1):
@@ -711,12 +722,13 @@ def _extract_event_study_params(
                                 break
                 if has_gap:
                     raise ValueError(
-                        "HonestDiD requires a consecutive event-time grid. "
-                        f"Retained pre-periods {pre_times} and/or post-periods "
-                        f"{post_times} have interior gaps. This can happen when "
-                        "some event-study horizons have non-finite SEs. Ensure "
-                        "all event-study periods have valid estimates, or use "
-                        "balance_e to restrict to a balanced subset."
+                        "HonestDiD requires a consecutive event-time grid "
+                        "around the omitted reference period. Retained "
+                        f"pre-periods {pre_times} and post-periods "
+                        f"{post_times} have gaps. This can happen when "
+                        "some event-study horizons have non-finite SEs. "
+                        "Ensure all event-study periods have valid estimates, "
+                        "or use balance_e to restrict to a balanced subset."
                     )
 
                 # Extract survey df
