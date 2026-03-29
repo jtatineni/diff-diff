@@ -403,3 +403,80 @@ class TestIFCorrections:
         summary = result.summary()
         assert "obs:" in summary
         assert "units:" not in summary.split("\n")[3]  # Treated line
+
+
+# =============================================================================
+# Unequal Cohort Counts Across Periods
+# =============================================================================
+
+
+class TestUnequalCohortCounts:
+    """Tests with n_gt != n_gs — catches normalizer/weight bugs."""
+
+    @pytest.fixture
+    def unequal_rc_data(self):
+        """RCS data where cohort sizes differ across periods."""
+        rng = np.random.default_rng(77)
+        records = []
+        # 4 periods, cohort g=2 treated at period 2
+        for period in range(4):
+            # Vary n_per_period so cohort counts differ across periods
+            n_per_period = 100 + period * 30  # 100, 130, 160, 190
+            for i in range(n_per_period):
+                # ~30% treated (cohort 2), ~70% never-treated
+                ft = 2 if rng.random() < 0.3 else 0
+                treated = (ft > 0) and (period >= ft)
+                y = rng.normal(0, 1) + (2.0 if treated else 0.0)
+                records.append(
+                    {
+                        "unit": f"u{period}_{i}",
+                        "period": period,
+                        "outcome": y,
+                        "first_treat": ft,
+                    }
+                )
+        import pandas as pd
+
+        return pd.DataFrame(records)
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_finite_results_unequal(self, unequal_rc_data, method):
+        result = CallawaySantAnna(estimation_method=method, panel=False).fit(
+            unequal_rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
+
+    def test_dr_covariates_unequal(self, unequal_rc_data):
+        """DR with covariates under unequal cohort counts."""
+        rng = np.random.default_rng(77)
+        unequal_rc_data["x1"] = rng.normal(0, 1, len(unequal_rc_data))
+        result = CallawaySantAnna(estimation_method="dr", panel=False).fit(
+            unequal_rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+
+    def test_bootstrap_unequal(self, unequal_rc_data):
+        """Bootstrap with unequal cohort counts."""
+        result = CallawaySantAnna(
+            estimation_method="reg", panel=False, n_bootstrap=49, seed=42
+        ).fit(
+            unequal_rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert result.bootstrap_results is not None
+        assert np.isfinite(result.overall_att)

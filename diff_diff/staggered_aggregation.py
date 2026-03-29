@@ -73,31 +73,17 @@ class CallawaySantAnnaAggregationMixin:
                 if g > 0:  # exclude never-treated (0)
                     survey_cohort_weights[g] = float(np.sum(sw[unit_cohorts == g]))
 
-        # For unweighted RCS: use fixed full-sample cohort counts so that
-        # aggregation weights match the WIF group-share denominator.
-        rcs_cohort_counts = None
-        if (
-            precomputed is not None
-            and not precomputed.get("is_panel", True)
-            and survey_cohort_weights is None
-        ):
-            unit_cohorts = precomputed["unit_cohorts"]
-            rcs_cohort_counts = {}
-            for g in np.unique(unit_cohorts):
-                if g > 0:
-                    rcs_cohort_counts[g] = int(np.sum(unit_cohorts == g))
-
         for (g, t), data in group_time_effects.items():
             # Only include post-treatment effects (t >= g - anticipation)
             # Pre-treatment effects are for parallel trends, not overall ATT
             if t < g - self.anticipation:
                 continue
             effects.append(data["effect"])
-            # Use fixed cohort-level weights for aggregation
+            # Use fixed cohort-level survey weight sum for aggregation.
+            # For RCS, data["n_treated"] is already the fixed cohort mass
+            # (set at the source in _compute_att_gt_rc), so the fallback is correct.
             if survey_cohort_weights is not None and g in survey_cohort_weights:
                 weights_list.append(survey_cohort_weights[g])
-            elif rcs_cohort_counts is not None and g in rcs_cohort_counts:
-                weights_list.append(rcs_cohort_counts[g])
             else:
                 weights_list.append(data["n_treated"])
             gt_pairs.append((g, t))
@@ -587,29 +573,16 @@ class CallawaySantAnnaAggregationMixin:
                 if g > 0:
                     survey_cohort_weights[g] = float(np.sum(sw[unit_cohorts == g]))
 
-        # For unweighted RCS: fixed full-sample cohort counts (matching WIF)
-        rcs_cohort_counts = None
-        if (
-            precomputed is not None
-            and not precomputed.get("is_panel", True)
-            and survey_cohort_weights is None
-        ):
-            unit_cohorts_es = precomputed["unit_cohorts"]
-            rcs_cohort_counts = {}
-            for g in np.unique(unit_cohorts_es):
-                if g > 0:
-                    rcs_cohort_counts[g] = int(np.sum(unit_cohorts_es == g))
-
         for (g, t), data in group_time_effects.items():
             e = t - g  # Relative time
             if e not in effects_by_e:
                 effects_by_e[e] = []
-            if survey_cohort_weights is not None and g in survey_cohort_weights:
-                w = survey_cohort_weights[g]
-            elif rcs_cohort_counts is not None and g in rcs_cohort_counts:
-                w = rcs_cohort_counts[g]
-            else:
-                w = data["n_treated"]
+            # For RCS, data["n_treated"] is already the fixed cohort mass
+            w = (
+                survey_cohort_weights[g]
+                if survey_cohort_weights is not None and g in survey_cohort_weights
+                else data["n_treated"]
+            )
             effects_by_e[e].append(
                 (
                     (g, t),  # Keep track of the (g,t) pair

@@ -2482,6 +2482,12 @@ class CallawaySantAnna(
         # For RCS, the resolved survey is already per-observation
         resolved_survey_rc = resolved_survey
 
+        # Fixed cohort masses: total observations per cohort across all periods.
+        # Used as aggregation weights so that n_treated is consistent with WIF.
+        rcs_cohort_masses = {}
+        for g in treatment_groups:
+            rcs_cohort_masses[g] = int(np.sum(unit_cohorts == g))
+
         return {
             "all_units": all_units,
             "unit_to_idx": None,  # RCS: obs indices are positions
@@ -2504,6 +2510,7 @@ class CallawaySantAnna(
                 if resolved_survey_rc is not None and hasattr(resolved_survey_rc, "df_survey")
                 else None
             ),
+            "rcs_cohort_masses": rcs_cohort_masses,
         }
 
     def _compute_att_gt_rc(
@@ -2701,7 +2708,9 @@ class CallawaySantAnna(
         }
 
         sw_sum = float(np.sum(sw_gt)) if sw_gt is not None else None
-        return att, se, n_gt, n_ct, inf_func_info, sw_sum
+        # Use fixed cohort mass as n_treated for aggregation weight consistency
+        cohort_mass = precomputed.get("rcs_cohort_masses", {}).get(g, n_gt)
+        return att, se, cohort_mass, n_ct, inf_func_info, sw_sum
 
     def _rc_2x2_did(
         self,
@@ -3179,20 +3188,21 @@ class CallawaySantAnna(
         asy_lin_rep_ps = score_ps @ H_ps_inv
 
         # M2_dr: uses DR residuals (m-y) instead of raw y
-        dr_resid_ct = m_ct - y_ct  # control period-t DR residuals
-        dr_resid_cs = m_cs - y_cs  # control period-s DR residuals
-        normalizer = np.sum(sw_gt) if sw_gt is not None else n_gt
+        # Use separate normalizers for post vs base period (RCS has different
+        # treated counts per period — using a single normalizer mis-scales)
+        dr_resid_ct = m_ct - y_ct
+        dr_resid_cs = m_cs - y_cs
+        normalizer_t = np.sum(sw_gt) if sw_gt is not None else n_gt
+        normalizer_s = np.sum(sw_gs) if sw_gs is not None else n_gs
         M2_dr = np.zeros(X_all_int.shape[1])
-        # Control-t: (w_ct/normalizer) * (m_ct - y_ct) * X
         ct_slice = slice(n_gt + n_gs, n_gt + n_gs + n_ct)
         M2_dr += np.mean(
-            ((w_ct / normalizer) * dr_resid_ct)[:, None] * X_all_int[ct_slice],
+            ((w_ct / normalizer_t) * dr_resid_ct)[:, None] * X_all_int[ct_slice],
             axis=0,
         )
-        # Control-s: -(w_cs/normalizer) * (m_cs - y_cs) * X (opposite sign)
         cs_slice = slice(n_gt + n_gs + n_ct, None)
         M2_dr -= np.mean(
-            ((w_cs / normalizer) * dr_resid_cs)[:, None] * X_all_int[cs_slice],
+            ((w_cs / normalizer_s) * dr_resid_cs)[:, None] * X_all_int[cs_slice],
             axis=0,
         )
 
@@ -3202,15 +3212,13 @@ class CallawaySantAnna(
         W_t = sw_ct if sw_ct is not None else np.ones(n_ct)
         bread_t = _safe_inv(X_ct_int.T @ (W_t[:, None] * X_ct_int))
 
-        # M1_t: dATT/dbeta_t (from treated-t prediction and control-t augmentation)
         sw_gt_vals = sw_gt if sw_gt is not None else np.ones(n_gt)
         M1_t = (
             -np.sum(sw_gt_vals[:, None] * X_gt_int, axis=0)
             + np.sum(w_ct[:, None] * X_ct_int, axis=0)
-        ) / normalizer
+        ) / normalizer_t
 
         asy_lin_rep_or_t = (W_t * (y_ct - m_ct))[:, None] * X_ct_int @ bread_t
-        # Apply only to control-t portion of inf_all
         inf_all[n_gt + n_gs : n_gt + n_gs + n_ct] += asy_lin_rep_or_t @ M1_t
 
         # --- OR IF correction -- period s model ---
@@ -3221,7 +3229,7 @@ class CallawaySantAnna(
         M1_s = (
             np.sum(sw_gs_vals[:, None] * X_gs_int, axis=0)
             - np.sum(w_cs[:, None] * X_cs_int, axis=0)
-        ) / normalizer
+        ) / normalizer_s
 
         asy_lin_rep_or_s = (W_s * (y_cs - m_cs))[:, None] * X_cs_int @ bread_s
         # Apply only to control-s portion of inf_all
