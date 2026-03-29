@@ -30,7 +30,7 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 - Event study aggregation and pre-treatment placebo effects
 - Multiplier bootstrap for valid inference in staggered settings
 
-**Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). *Working Paper*. R package: `triplediff`.
+**Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). "Better Understanding Triple Differences Estimators." *Working Paper*. R package: `triplediff`.
 
 ### Enhanced Visualization
 

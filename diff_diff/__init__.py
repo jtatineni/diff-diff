@@ -88,6 +88,7 @@ from diff_diff.prep import (
     generate_factor_data,
     generate_panel_data,
     generate_staggered_data,
+    generate_staggered_ddd_data,
     make_post_indicator,
     make_treatment_indicator,
     rank_control_units,
@@ -139,6 +140,12 @@ from diff_diff.triple_diff import (
     TripleDifference,
     TripleDifferenceResults,
     triple_difference,
+)
+from diff_diff.staggered_triple_diff import (
+    StaggeredTripleDifference,
+)
+from diff_diff.staggered_triple_diff_results import (
+    StaggeredTripleDiffResults,
 )
 from diff_diff.continuous_did import (
     ContinuousDiD,
@@ -197,6 +204,7 @@ SA = SunAbraham
 BJS = ImputationDiD
 Gardner = TwoStageDiD
 DDD = TripleDifference
+SDDD = StaggeredTripleDifference
 Stacked = StackedDiD
 Bacon = BaconDecomposition
 EDiD = EfficientDiD
@@ -227,6 +235,7 @@ __all__ = [
     "BJS",
     "Gardner",
     "DDD",
+    "SDDD",
     "Stacked",
     "Bacon",
     # Bacon Decomposition
@@ -254,6 +263,8 @@ __all__ = [
     "two_stage_did",
     "TripleDifferenceResults",
     "triple_difference",
+    "StaggeredTripleDifference",
+    "StaggeredTripleDiffResults",
     "TROPResults",
     "trop",
     "StackedDiDResults",
@@ -303,6 +314,7 @@ __all__ = [
     "generate_ddd_data",
     "generate_panel_data",
     "generate_event_study_data",
+    "generate_staggered_ddd_data",
     "generate_continuous_did_data",
     "create_event_time",
     "aggregate_to_cohorts",

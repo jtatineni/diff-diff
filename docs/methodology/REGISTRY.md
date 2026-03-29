@@ -18,6 +18,7 @@ This document provides the academic foundations and key implementation requireme
 3. [Advanced Estimators](#advanced-estimators)
    - [SyntheticDiD](#syntheticdid)
    - [TripleDifference](#tripledifference)
+   - [StaggeredTripleDifference](#staggeredtripledifference)
    - [TROP](#trop)
 4. [Diagnostics & Sensitivity](#diagnostics--sensitivity)
    - [PlaceboTests](#placebotests)
@@ -1249,6 +1250,144 @@ has no additional effect.
 - [x] ATT and SE match R within <0.001% for all methods and DGP types
 - [x] Survey design support: all methods (reg, IPW, DR) with weighted OLS/logit + TSL on combined influence functions. Weighted solve_logit() for propensity scores in IPW/DR paths.
 - **Note:** TripleDifference survey SE: for IPW/DR, pairwise IFs incorporate survey weights via weighted Riesz representers (`riesz *= weights`), so the combined IF is divided by per-observation survey weights (`inf / sw`) before passing to `compute_survey_vcov()` to prevent double-weighting. For regression (RA), pairwise IFs are already on the unweighted residual scale (WLS fits use weights internally but the IF is not Riesz-multiplied), so the combined IF passes directly to TSL without de-weighting. The OLS nuisance IF corrections in DR mode use weighted cross-products normalized by subgroup row count `n` (not `sum(weights)`).
+
+---
+
+## StaggeredTripleDifference
+
+**Primary source:** [Ortiz-Villavicencio, M., & Sant'Anna, P.H.C. (2025). Better Understanding Triple Differences Estimators. arXiv:2505.09942.](https://arxiv.org/abs/2505.09942)
+
+**Key implementation requirements:**
+
+*Assumption checks / warnings:*
+- Requires balanced panel with enabling-group `S_i`, binary eligibility `Q_i` (time-invariant), and outcome `Y`
+- Eligibility must be binary (0/1) — raises `ValueError` if not
+- Eligibility must be time-invariant within each unit — raises `ValueError` if varying
+- Requires both eligible (Q=1) and ineligible (Q=0) units
+- Warns if any (S, Q) cell in a three-DiD comparison has < 5 units
+- Warns if no valid comparison groups exist for a (g, t) pair (skips that pair)
+- Propensity score overlap enforced by clipping at `pscore_trim` (default 0.01)
+- Warns on singular GMM covariance matrix (falls back to pseudoinverse)
+
+*Data structure:*
+
+Balanced panel. Key variables:
+- `S_i` (`first_treat`): enabling group — 0 or inf for never-enabled
+- `Q_i` (`eligibility`): binary, time-invariant eligibility indicator
+- Treatment: `D_{i,t} = 1{t >= S_i AND Q_i = 1}` (absorbing)
+- Covariates `X_i`: time-invariant (first observation per unit used)
+
+*Estimator equation (Equation 4.1 in paper, as implemented):*
+
+Three-DiD decomposition for each (g, g_c, t) triple:
+
+```
+DDD(g, g_c, t) = DiD_A + DiD_B - DiD_C
+```
+
+where each pairwise DiD operates on panel outcome changes `delta_Y = Y_t - Y_b`:
+- DiD_A: treated (S=g, Q=1) vs (S=g, Q=0)     [+1, paper Term 1]
+- DiD_B: treated (S=g, Q=1) vs (S=g_c, Q=1)   [+1, paper Term 2]
+- DiD_C: treated (S=g, Q=1) vs (S=g_c, Q=0)   [-1, paper Term 3]
+
+This sign convention matches both the paper's Equation 4.1 and the existing
+`TripleDifference` decomposition (DDD = DiD_3 + DiD_2 - DiD_1 with subgroups
+4=G1P1, 3=G1P0, 2=G0P1, 1=G0P0).
+
+Valid comparison groups: `G_c = {g_c : g_c > max(g, t)}`, including never-enabled (S=0).
+
+*With covariates / doubly robust (DR, recommended):*
+
+Each pairwise DiD uses the CallawaySantAnna DR estimator on outcome changes:
+1. Fit outcome regression `E[delta_Y | X]` on control units (OLS)
+2. Estimate propensity score `P(treated | X)` within each 2-cell subset (logistic)
+3. Combine: `ATT = mean(treated_change - m_hat) + sum(w_ipw * (m_hat - control_change)) / n_t`
+
+*GMM-optimal combination across comparison groups (Equations 4.11-4.12):*
+
+```
+ATT_gmm(g,t) = w_gmm' @ [ATT_1, ..., ATT_k]
+w_gmm = Omega^{-1} @ 1 / (1' @ Omega^{-1} @ 1)
+```
+
+where `Omega[j,l] = (1/n) * sum_i IF_j[i] * IF_l[i]` is estimated from influence
+functions across comparison groups. Minimizes asymptotic variance subject to `sum(w) = 1`.
+
+*Aggregation:*
+
+Event study (Equation 4.13): cohort-share-weighted average across cohorts for each
+relative time `e = t - g`. Reuses `CallawaySantAnnaAggregationMixin._aggregate_event_study()`.
+
+Overall ATT (Equation 4.14): weighted average across post-treatment (g,t) pairs.
+Reuses `CallawaySantAnnaAggregationMixin._aggregate_simple()`.
+
+Group effects: average across post-treatment time periods for each cohort.
+Reuses `CallawaySantAnnaAggregationMixin._aggregate_by_group()`.
+
+All aggregation SEs include the WIF (Weight Influence Function) adjustment for
+uncertainty in cohort-share weights, inherited from the CallawaySantAnna mixin.
+
+*Standard errors:*
+
+Individual (g,t) level:
+```
+SE(g,t) = std(IF_gmm, ddof=1) / sqrt(n)
+```
+where `IF_gmm = w_gmm' @ IF_matrix` is the GMM-combined unit-level influence function
+(length n_units, zero-padded for non-participating units). Inherently
+heteroskedasticity-robust via the influence function approach.
+
+Aggregation SEs: via WIF-adjusted combined influence functions from the
+CallawaySantAnna aggregation mixin.
+
+Bootstrap: multiplier bootstrap (Algorithm 1 of Callaway & Sant'Anna 2021) via
+`CallawaySantAnnaBootstrapMixin._run_multiplier_bootstrap()`. Supports
+Rademacher, Mammen, and Webb weight distributions. Provides simultaneous
+confidence bands (sup-t) for event study.
+
+- **Note:** Matches R `triplediff` package `compute_did()` formulation:
+  Hajek-normalized Riesz representers, separate M1/M3 OR corrections on
+  treated/control IF components, PS correction via logistic Hessian and score
+  function, hessian = (X'WX)^{-1} * n_pair. Three-DiD IF combination weights
+  use `w_j = n_cell / n_pair_j` (matching R's att_dr). GMM Omega estimated via
+  sample covariance (ddof=1). Per-(g,t) SE uses R's GMM formula
+  `sqrt(1 / (n * sum(Omega_inv)))` for multiple comparison groups, or
+  `sqrt(sum(IF^2) / n^2)` for single comparison group.
+- **Note:** The `cluster` parameter is accepted but not currently wired to the
+  analytical SE computation. The multiplier bootstrap provides unit-level
+  clustering. Full cluster-robust analytical SEs are deferred.
+- **Note:** Survey design support is deferred; raises `NotImplementedError`.
+
+*Edge cases:*
+- Single comparison group: GMM reduces to w=[1], no matrix inversion
+- Zero valid comparison groups for a (g,t): skipped with warning
+- Singular GMM covariance: falls back to pseudoinverse with warning
+- Small cells (< 5 units): warns but proceeds
+- Non-finite ATT from a comparison group: excluded from GMM combination
+- Never-enabled encoded as inf: normalized to 0 internally
+- No valid (g,t) pairs at all: raises `ValueError`
+
+**Reference implementation(s):**
+- R `triplediff` (companion package by paper authors) — not yet validated against
+
+**Requirements checklist:**
+- [x] Panel data with (unit, time, enabling-group S, eligibility Q, outcome Y)
+- [x] Three comparison sub-groups per (g, g_c): (S=g, Q=0), (S=g_c, Q=1), (S=g_c, Q=0)
+- [x] Individual comparison cohorts, never pooled — combined via GMM weights
+- [x] Comparison groups satisfy g_c > max{g, t}
+- [x] Doubly robust: consistent if either propensity or outcome model correct (per component)
+- [x] GMM-optimal weighting via closed-form inverse-variance formula
+- [x] Event-study aggregation with cohort-share weights (via CS mixin)
+- [x] Pre-treatment event-study coefficients constructable
+- [x] Influence-function-based SEs
+- [x] Multiplier bootstrap for simultaneous confidence bands (via CS mixin)
+- [ ] Cluster-robust analytical SEs (accepted but not wired — deferred)
+- [ ] Survey design support (deferred — raises NotImplementedError)
+- [x] Validation against R `triplediff` package: group-time ATT and SE match within
+  0.001% across 10 scenarios (3 seeds, 3 methods, both control group modes).
+  Aggregation (event study, overall ATT) uses CS mixin cohort-size weights which
+  differ from R's `agg_ddd()` group-probability weights (within 25%); this is a
+  documented weighting choice, not a specification violation.
 
 ---
 
