@@ -211,8 +211,9 @@ class CallawaySantAnnaBootstrapMixin:
             )
             unit_to_idx = {u: i for i, u in enumerate(all_units)}
 
-        # Get list of (g,t) pairs
-        gt_pairs = list(group_time_effects.keys())
+        # Get list of (g,t) pairs that have influence function info
+        # (skip zero-mass cells that recorded NaN ATT without IF)
+        gt_pairs = [gt for gt in group_time_effects.keys() if gt in influence_func_info]
         n_gt = len(gt_pairs)
 
         # Identify post-treatment (g,t) pairs for overall ATT

@@ -699,20 +699,28 @@ def _extract_event_study_params(
                 else:
                     sigma = np.diag(np.array(ses) ** 2)
 
-                # Warn if event times have interior gaps (R requires consecutive)
-                if len(rel_times) >= 2:
-                    diffs = [rel_times[i + 1] - rel_times[i] for i in range(len(rel_times) - 1)]
-                    if any(d != 1 for d in diffs):
-                        import warnings
+                # Validate pre and post blocks are each consecutive
+                # (the gap between last pre and first post is the omitted
+                # reference period and is expected)
+                has_gap = False
+                for block in [pre_times, post_times]:
+                    if len(block) >= 2:
+                        for i in range(len(block) - 1):
+                            if block[i + 1] - block[i] != 1:
+                                has_gap = True
+                                break
+                if has_gap:
+                    import warnings
 
-                        warnings.warn(
-                            "HonestDiD: retained event-study horizons are not consecutive "
-                            f"({rel_times}). Interior gaps change the geometry of smoothness "
-                            "and relative-magnitude restrictions. R's HonestDiD requires "
-                            "a consecutive event-time grid.",
-                            UserWarning,
-                            stacklevel=3,
-                        )
+                    warnings.warn(
+                        "HonestDiD: retained event-study horizons have interior "
+                        f"gaps within pre or post blocks (pre={pre_times}, "
+                        f"post={post_times}). Interior gaps change the geometry "
+                        "of smoothness and relative-magnitude restrictions. "
+                        "R's HonestDiD requires a consecutive event-time grid.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
 
                 # Extract survey df
                 df_survey = None
