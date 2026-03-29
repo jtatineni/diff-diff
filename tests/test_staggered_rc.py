@@ -406,6 +406,44 @@ class TestIFCorrections:
 
 
 # =============================================================================
+# Analytical vs Bootstrap SE convergence (proves IF scaling is correct)
+# =============================================================================
+
+
+class TestAnalyticalBootstrapConvergence:
+    """Analytical SE should closely match bootstrap SE — proves IF magnitude is correct."""
+
+    def test_reg_se_matches_bootstrap(self, rc_data_with_covariates):
+        """Analytical reg SE should be within 20% of bootstrap SE."""
+        r_analytical = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            rc_data_with_covariates,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+        )
+        r_bootstrap = CallawaySantAnna(
+            estimation_method="reg", panel=False, n_bootstrap=499, seed=42
+        ).fit(
+            rc_data_with_covariates,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+        )
+        # ATTs should match (bootstrap doesn't change point estimate)
+        np.testing.assert_allclose(r_analytical.overall_att, r_bootstrap.overall_att, atol=1e-10)
+        # SEs should be within 10% (proves IF scaling is correct)
+        ratio = r_analytical.overall_se / r_bootstrap.overall_se
+        assert 0.9 < ratio < 1.1, (
+            f"Analytical/bootstrap SE ratio {ratio:.3f} outside [0.9, 1.1] — "
+            f"analytical={r_analytical.overall_se:.4f}, bootstrap={r_bootstrap.overall_se:.4f}"
+        )
+
+
+# =============================================================================
 # Unequal Cohort Counts Across Periods
 # =============================================================================
 
