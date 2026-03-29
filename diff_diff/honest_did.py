@@ -612,10 +612,13 @@ def _extract_event_study_params(
             # Fallback: diagonal from SEs
             sigma = np.diag(np.array(ses) ** 2)
 
-        # Extract survey df if available
+        # Extract survey df. Replicate designs with undefined df → sentinel 0.
         df_survey = None
         if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
-            df_survey = getattr(results.survey_metadata, "df_survey", None)
+            sm = results.survey_metadata
+            df_survey = getattr(sm, "df_survey", None)
+            if df_survey is None and getattr(sm, "replicate_method", None) is not None:
+                df_survey = 0
 
         return (
             beta_hat,
@@ -665,9 +668,18 @@ def _extract_event_study_params(
                 }
                 rel_times = sorted(event_effects.keys())
 
-                # Split into pre and post
-                pre_times = [t for t in rel_times if t < 0]
-                post_times = [t for t in rel_times if t >= 0]
+                # Infer the omitted reference period from the n_groups=0 entry
+                # (injected by _aggregate_event_study for universal base).
+                # Default to e=-1 if no reference found (varying base).
+                ref_period = -1
+                for t, data in results.event_study_effects.items():
+                    if data.get("n_groups", 1) == 0:
+                        ref_period = t
+                        break
+
+                # Split relative to the reference period, not hardcoded at 0
+                pre_times = [t for t in rel_times if t < ref_period]
+                post_times = [t for t in rel_times if t > ref_period]
 
                 effects = []
                 ses = []
@@ -731,10 +743,15 @@ def _extract_event_study_params(
                         "or use balance_e to restrict to a balanced subset."
                     )
 
-                # Extract survey df
+                # Extract survey df. For replicate designs with undefined df
+                # (rank <= 1), use sentinel df=0 so _get_critical_value returns
+                # NaN, matching the safe_inference contract.
                 df_survey = None
                 if hasattr(results, "survey_metadata") and results.survey_metadata is not None:
-                    df_survey = getattr(results.survey_metadata, "df_survey", None)
+                    sm = results.survey_metadata
+                    df_survey = getattr(sm, "df_survey", None)
+                    if df_survey is None and getattr(sm, "replicate_method", None) is not None:
+                        df_survey = 0  # undefined replicate df → NaN inference
 
                 return (
                     beta_hat,
