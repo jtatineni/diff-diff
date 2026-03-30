@@ -670,16 +670,20 @@ def _extract_event_study_params(
 
                 # Infer the omitted reference period from the n_groups=0 entry
                 # (injected by _aggregate_event_study for universal base).
-                # Default to e=-1 if no reference found (varying base).
-                ref_period = -1
+                ref_period = None
                 for t, data in results.event_study_effects.items():
                     if data.get("n_groups", 1) == 0:
                         ref_period = t
                         break
 
-                # Split relative to the reference period, not hardcoded at 0
-                pre_times = [t for t in rel_times if t < ref_period]
-                post_times = [t for t in rel_times if t > ref_period]
+                if ref_period is not None:
+                    # Universal base: split relative to the reference period
+                    pre_times = [t for t in rel_times if t < ref_period]
+                    post_times = [t for t in rel_times if t > ref_period]
+                else:
+                    # Varying base or no reference marker: split at t < 0 / t >= 0
+                    pre_times = [t for t in rel_times if t < 0]
+                    post_times = [t for t in rel_times if t >= 0]
 
                 if len(pre_times) == 0:
                     raise ValueError(
@@ -718,14 +722,18 @@ def _extract_event_study_params(
                 else:
                     sigma = np.diag(np.array(ses) ** 2)
 
-                # Validate the full event-time grid is consecutive around
-                # the omitted reference period (exactly one gap allowed).
-                # R's HonestDiD refuses non-consecutive grids.
+                # Validate the full event-time grid is consecutive.
+                # For universal base: exactly one gap for the omitted reference.
+                # For varying base: no gap expected (pre ends at -1, post starts at 0).
                 if pre_times and post_times:
-                    # Expected: pre_times[-1] + 1 = reference, reference + 1 = post_times[0]
-                    # So post_times[0] - pre_times[-1] should be exactly 2
-                    ref_gap = post_times[0] - pre_times[-1]
-                    has_gap = ref_gap != 2
+                    if ref_period is not None:
+                        # Universal: pre[-1]+1 = ref, ref+1 = post[0] → gap of 2
+                        ref_gap = post_times[0] - pre_times[-1]
+                        has_gap = ref_gap != 2
+                    else:
+                        # Varying: pre ends at -1, post starts at 0 → gap of 1
+                        ref_gap = post_times[0] - pre_times[-1]
+                        has_gap = ref_gap != 1
                 elif pre_times:
                     has_gap = False  # only pre, no ref gap to check
                 elif post_times:
