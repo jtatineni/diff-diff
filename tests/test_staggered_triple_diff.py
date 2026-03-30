@@ -403,3 +403,71 @@ class TestStaggeredTripleDiffEdgeCases:
         assert "overall_att" in d
         assert "n_obs" in d
         assert "estimation_method" in d
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for specific bug fixes
+# ---------------------------------------------------------------------------
+
+class TestStaggeredTripleDiffRegressions:
+    def test_base_period_outside_panel_warns(self):
+        """Cohort with base period before observed panel should warn, not crash."""
+        # Cohort g=2 with anticipation=1 needs base_period = g-1-1 = 0,
+        # but periods start at 1. Should warn and skip that cell.
+        data = generate_staggered_ddd_data(
+            n_units=100, n_periods=4, cohort_periods=[2, 4],
+            seed=77,
+        )
+        est = StaggeredTripleDifference(anticipation=1)
+        import warnings as _w
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            res = est.fit(data, "outcome", "unit", "period",
+                          "first_treat", "eligibility")
+        base_period_warnings = [
+            w for w in caught if "outside the observed panel" in str(w.message)
+        ]
+        assert len(base_period_warnings) > 0, "Expected warning about base period"
+        assert np.isfinite(res.overall_att)
+
+    def test_empty_subgroup_warns(self):
+        """Data where one (S,Q) cell is empty should warn, not crash."""
+        data = generate_staggered_ddd_data(
+            n_units=100, cohort_periods=[4, 6], seed=88,
+        )
+        # Remove all ineligible units from cohort 6 to make (S=6,Q=0) empty
+        mask = ~((data["first_treat"] == 6) & (data["eligibility"] == 0))
+        data = data[mask].reset_index(drop=True)
+        est = StaggeredTripleDifference()
+        import warnings as _w
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            res = est.fit(data, "outcome", "unit", "period",
+                          "first_treat", "eligibility")
+        subgroup_warnings = [
+            w for w in caught if "Empty subgroup" in str(w.message)
+        ]
+        assert len(subgroup_warnings) > 0, "Expected warning about empty subgroup"
+        assert np.isfinite(res.overall_att)
+
+    def test_collinear_covariates_cached_ps_finite(self):
+        """Collinear covariates with PS cache reuse should produce finite results."""
+        data = generate_staggered_ddd_data(
+            n_units=200, treatment_effect=3.0,
+            add_covariates=True, seed=55,
+        )
+        # Add a perfectly collinear covariate (x3 = 2*x1)
+        data["x3"] = 2.0 * data["x1"]
+        est = StaggeredTripleDifference(
+            estimation_method="dr", rank_deficient_action="warn",
+        )
+        import warnings as _w
+        with _w.catch_warnings(record=True):
+            _w.simplefilter("always")
+            res = est.fit(data, "outcome", "unit", "period",
+                          "first_treat", "eligibility",
+                          covariates=["x1", "x2", "x3"])
+        # All group-time effects should be finite despite collinearity
+        for (g, t), eff in res.group_time_effects.items():
+            assert np.isfinite(eff["effect"]), f"Non-finite ATT at (g={g},t={t})"
+            assert np.isfinite(eff["se"]), f"Non-finite SE at (g={g},t={t})"
