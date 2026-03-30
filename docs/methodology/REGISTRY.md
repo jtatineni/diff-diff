@@ -1296,8 +1296,15 @@ This sign convention matches both the paper's Equation 4.1 and the existing
 
 Valid comparison groups: for `control_group="nevertreated"`, only the never-enabled
 cohort (S=0). For `control_group="notyettreated"`, `G_c = {g_c : g_c > max(t, base_period)
-+ anticipation}`, plus never-enabled. The anticipation-adjusted threshold ensures cohorts
-within the anticipation window are excluded from controls.
++ anticipation}`, plus never-enabled.
+
+- **Deviation from paper:** The paper's Section 4 defines admissible comparison cohorts
+  as `g_c > max(g, t)`. The implementation follows the companion R package `triplediff`
+  which uses `g_c > max(t, base_period) + anticipation`. These rules differ for
+  pre-treatment cells (`t < g`) when a later cohort lies in `(t, g)`: the paper would
+  exclude it, while the R package (and this implementation) may include it depending
+  on the base period. The R-matching rule correctly accounts for the anticipation
+  parameter and base-period selection in the comparison-group filter.
 
 *With covariates / doubly robust (DR, recommended):*
 
