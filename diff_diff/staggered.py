@@ -1430,10 +1430,9 @@ class CallawaySantAnna(
                     "cohorts when there are no never-treated units."
                 )
 
-        # Note: CallawaySantAnna uses weights-only survey (strata/PSU/FPC
-        # rejected above). We do NOT inject cluster-as-PSU here because CS
-        # per-cell SEs use IF-based variance, not TSL. The user's cluster=
-        # parameter is handled by the existing non-survey clustering path.
+        # Note: CallawaySantAnna supports survey weights, strata, PSU, and FPC.
+        # Per-cell SEs use IF-based variance; aggregated SEs use design-based
+        # variance via compute_survey_if_variance() or PSU-level bootstrap.
         # Pre-compute data structures for efficient ATT(g,t) computation
         if self.panel:
             precomputed = self._precompute_structures(
@@ -2069,8 +2068,8 @@ class CallawaySantAnna(
                 score_ps = (D_all - pscore_all)[:, None] * X_all_int
                 if sw_all is not None:
                     score_ps = score_ps * sw_all[:, None]
-                # R: asy.lin.rep.ps = score %*% solve(Hessian.ps) / n
-                asy_lin_rep_psi = score_ps @ H_psi_inv / n_all_panel
+                # R: asy.lin.rep.ps = score.ps %*% Hessian.ps  (psi scale, O(1) per obs)
+                asy_lin_rep_psi = score_ps @ H_psi_inv
 
                 att_control_weighted = np.sum(weights_control_norm * control_change)
                 # R: M2 = colMeans(w.cont * (y - att) * X)
@@ -2328,7 +2327,8 @@ class CallawaySantAnna(
                     score_ps = (D_all - pscore_all)[:, None] * X_all_int
                     if sw_all is not None:
                         score_ps = score_ps * sw_all[:, None]
-                    asy_lin_rep_psi = score_ps @ H_psi_inv / n_all_panel
+                    # R: asy.lin.rep.ps = score.ps %*% Hessian.ps  (psi scale)
+                    asy_lin_rep_psi = score_ps @ H_psi_inv
 
                     dr_resid_control = m_control - control_change
                     M2_dr = np.mean(
@@ -2390,7 +2390,8 @@ class CallawaySantAnna(
 
                     D_all = np.concatenate([np.ones(n_t), np.zeros(n_c)])
                     score_ps = (D_all - pscore_all)[:, None] * X_all_int
-                    asy_lin_rep_psi = score_ps @ H_psi_inv / n_all_panel
+                    # R: asy.lin.rep.ps = score.ps %*% Hessian.ps  (psi scale)
+                    asy_lin_rep_psi = score_ps @ H_psi_inv
 
                     dr_resid_control = m_control - control_change
                     M2_dr = np.mean(
@@ -3136,8 +3137,8 @@ class CallawaySantAnna(
         score_ps = (D_all - pscore)[:, None] * X_all_int
         if sw_all is not None:
             score_ps = score_ps * sw_all[:, None]
-        # R: asy.lin.rep.ps = score %*% solve(Hessian.ps) / n
-        asy_lin_rep_psi = score_ps @ H_psi_inv / n_all
+        # R: asy.lin.rep.ps = score.ps %*% Hessian.ps  (psi scale, O(1) per obs)
+        asy_lin_rep_psi = score_ps @ H_psi_inv
 
         # Convert leading psi to phi: phi = psi / n_all
         inf_all = psi_all / n_all
@@ -3456,8 +3457,8 @@ class CallawaySantAnna(
         score_ps = (D_all - pscore)[:, None] * X_all_int
         if sw_all is not None:
             score_ps = score_ps * sw_all[:, None]
-        # R: asy.lin.rep.ps = score %*% solve(Hessian.ps) / n
-        asy_lin_rep_psi = score_ps @ H_psi_inv / n_all
+        # R: asy.lin.rep.ps = score.ps %*% Hessian.ps  (psi scale, O(1) per obs)
+        asy_lin_rep_psi = score_ps @ H_psi_inv
 
         # R: M2 = colMeans(w_ipw * dr_resid / mean(w_ipw) * X)
         ct_slice = slice(n_gt + n_gs, n_gt + n_gs + n_ct)
