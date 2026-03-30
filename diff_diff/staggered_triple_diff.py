@@ -285,7 +285,14 @@ class StaggeredTripleDifference(
                 base_period_val = self._get_base_period(g, t)
                 if base_period_val is None:
                     continue
-                if base_period_val not in time_to_col or t not in time_to_col:
+                if base_period_val not in time_to_col:
+                    warnings.warn(
+                        f"Base period {base_period_val} for (g={g}, t={t}) is "
+                        "outside the observed panel. Skipping this cell.",
+                        UserWarning, stacklevel=2,
+                    )
+                    continue
+                if t not in time_to_col:
                     continue
 
                 has_never_enabled = bool(np.any(unit_cohorts == 0))
@@ -770,6 +777,21 @@ class StaggeredTripleDifference(
         n_c = int(np.sum(sub_c_mask))
 
         if n_treated == 0 or n_a == 0 or n_b == 0 or n_c == 0:
+            empty = []
+            if n_treated == 0:
+                empty.append(f"(S={g},Q=1)")
+            if n_a == 0:
+                empty.append(f"(S={g},Q=0)")
+            if n_b == 0:
+                empty.append(f"(S={g_c},Q=1)")
+            if n_c == 0:
+                empty.append(f"(S={g_c},Q=0)")
+            warnings.warn(
+                f"Empty subgroup(s) {', '.join(empty)} for "
+                f"(g={g}, g_c={g_c}, t={t}). "
+                "Comparison unidentified, skipping.",
+                UserWarning, stacklevel=3,
+            )
             return None
 
         if min(n_treated, n_a, n_b, n_c) < 5:
@@ -1038,7 +1060,10 @@ class StaggeredTripleDifference(
                     rank_deficient_action=self.rank_deficient_action,
                 )
                 _check_propensity_diagnostics(pscore, self.pscore_trim)
-                pscore_cache[pscore_key] = beta_logistic
+                # Zero-fill NaN coefficients (from rank-deficient columns)
+                # before caching, so cache reuse doesn't propagate NaN.
+                beta_clean = np.where(np.isfinite(beta_logistic), beta_logistic, 0.0)
+                pscore_cache[pscore_key] = beta_clean
             except (np.linalg.LinAlgError, ValueError):
                 if self.rank_deficient_action == "error":
                     raise
