@@ -624,6 +624,23 @@ class StaggeredTripleDifference(
         for col in [outcome, first_treat, eligibility]:
             if df[col].isna().any():
                 raise ValueError(f"Column '{col}' contains missing values.")
+
+        # Reject non-finite outcomes (Inf/-Inf)
+        if not np.all(np.isfinite(df[outcome])):
+            raise ValueError(
+                f"Column '{outcome}' contains non-finite values (Inf/-Inf). "
+                "All outcome values must be finite."
+            )
+
+        # Reject non-finite covariates
+        if covariates:
+            for cov in covariates:
+                if df[cov].isna().any():
+                    raise ValueError(f"Covariate '{cov}' contains missing values.")
+                if not np.all(np.isfinite(df[cov])):
+                    raise ValueError(
+                        f"Covariate '{cov}' contains non-finite values."
+                    )
         if df[eligibility].nunique() < 2:
             raise ValueError(
                 "Need both eligible (Q=1) and ineligible (Q=0) units. "
@@ -638,16 +655,16 @@ class StaggeredTripleDifference(
                 f"{int(dup.sum())} duplicates detected. Panel must have unique rows."
             )
 
-        # Check balanced panel — every unit observed in every period
-        all_periods = df[time].unique()
-        n_global_periods = len(all_periods)
-        periods_per_unit = df.groupby(unit)[time].nunique()
-        incomplete = periods_per_unit[periods_per_unit < n_global_periods]
-        if len(incomplete) > 0:
+        # Check balanced panel — every unit observed in exactly the global period set
+        global_periods = set(df[time].unique())
+        n_global_periods = len(global_periods)
+        unit_period_sets = df.groupby(unit)[time].apply(set)
+        mismatched = unit_period_sets[unit_period_sets != global_periods]
+        if len(mismatched) > 0:
             raise ValueError(
                 "Unbalanced panel detected. All units must be observed in "
                 f"all {n_global_periods} periods. "
-                f"Found {len(incomplete)} units with fewer periods."
+                f"Found {len(mismatched)} units with different period sets."
             )
 
         # Check time-invariant first_treat

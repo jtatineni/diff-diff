@@ -152,7 +152,14 @@ class TestStaggeredDDDNevertreated:
         res = _run_python(data, r["est_method"], r["control_group"])
 
         py_gt = sorted(res.group_time_effects.items())
+        r_gt = list(zip(r["gt_groups"], r["gt_periods"]))
+        assert len(py_gt) == len(r["gt_att"]), (
+            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_att'])}"
+        )
         for i, ((g, t), eff) in enumerate(py_gt):
+            assert (g, t) == (r_gt[i][0], r_gt[i][1]), (
+                f"{key}: GT cell mismatch at index {i}: Python=({g},{t}), R={r_gt[i]}"
+            )
             _assert_close(
                 eff["effect"], r["gt_att"][i],
                 ATT_RTOL, ATT_ATOL,
@@ -166,6 +173,9 @@ class TestStaggeredDDDNevertreated:
         res = _run_python(data, r["est_method"], r["control_group"])
 
         py_gt = sorted(res.group_time_effects.items())
+        assert len(py_gt) == len(r["gt_se"]), (
+            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_se'])}"
+        )
         for i, ((g, t), eff) in enumerate(py_gt):
             _assert_close(
                 eff["se"], r["gt_se"][i],
@@ -197,7 +207,14 @@ class TestStaggeredDDDNotyettreated:
         res = _run_python(data, r["est_method"], r["control_group"])
 
         py_gt = sorted(res.group_time_effects.items())
+        r_gt = list(zip(r["gt_groups"], r["gt_periods"]))
+        assert len(py_gt) == len(r["gt_att"]), (
+            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_att'])}"
+        )
         for i, ((g, t), eff) in enumerate(py_gt):
+            assert (g, t) == (r_gt[i][0], r_gt[i][1]), (
+                f"{key}: GT cell mismatch at index {i}: Python=({g},{t}), R={r_gt[i]}"
+            )
             _assert_close(
                 eff["effect"], r["gt_att"][i],
                 ATT_RTOL, ATT_ATOL,
@@ -211,6 +228,9 @@ class TestStaggeredDDDNotyettreated:
         res = _run_python(data, r["est_method"], r["control_group"])
 
         py_gt = sorted(res.group_time_effects.items())
+        assert len(py_gt) == len(r["gt_se"]), (
+            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r['gt_se'])}"
+        )
         for i, ((g, t), eff) in enumerate(py_gt):
             _assert_close(
                 eff["se"], r["gt_se"][i],
