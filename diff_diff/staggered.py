@@ -2056,32 +2056,32 @@ class CallawaySantAnna(
                 X_all_int = np.column_stack([np.ones(n_t + n_c), X_all])
                 pscore_all = np.concatenate([pscore_treated, pscore_control])
 
-                # PS IF correction — R convention: H = X'WX, M2 = colMeans
+                # PS IF correction — compute in R's psi convention, convert to phi
                 n_all_panel = n_t + n_c
                 W_ps = pscore_all * (1 - pscore_all)
                 if sw_all is not None:
                     W_ps = W_ps * sw_all
-                H = X_all_int.T @ (W_ps[:, None] * X_all_int)
-                H_inv = _safe_inv(H)
+                # R: Hessian.ps = crossprod(X * sqrt(W)) / n
+                H_psi = X_all_int.T @ (W_ps[:, None] * X_all_int) / n_all_panel
+                H_psi_inv = _safe_inv(H_psi)
 
                 D_all = np.concatenate([np.ones(n_t), np.zeros(n_c)])
                 score_ps = (D_all - pscore_all)[:, None] * X_all_int
                 if sw_all is not None:
                     score_ps = score_ps * sw_all[:, None]
-                asy_lin_rep_ps = score_ps @ H_inv
+                # R: asy.lin.rep.ps = score %*% solve(Hessian.ps) / n
+                asy_lin_rep_psi = score_ps @ H_psi_inv / n_all_panel
 
                 att_control_weighted = np.sum(weights_control_norm * control_change)
-                # R: colMeans over ALL n obs (treated rows contribute zero)
-                M2 = (
-                    np.sum(
-                        (weights_control_norm * (control_change - att_control_weighted))[:, None]
-                        * X_all_int[n_t:],
-                        axis=0,
-                    )
-                    / n_all_panel
+                # R: M2 = colMeans(w.cont * (y - att) * X)
+                M2 = np.mean(
+                    (weights_control_norm * (control_change - att_control_weighted))[:, None]
+                    * X_all_int[n_t:],
+                    axis=0,
                 )
 
-                inf_func = inf_func + asy_lin_rep_ps @ M2
+                # psi-scale correction, convert to phi for storage
+                inf_func = inf_func + (asy_lin_rep_psi @ M2) / n_all_panel
 
                 # SE from influence function variance
                 var_psi = np.sum(inf_func**2)
@@ -2316,19 +2316,19 @@ class CallawaySantAnna(
                     )
                     pscore_all = np.concatenate([pscore_treated_clipped, pscore_control])
 
-                    # PS IF correction — R convention: H = X'WX, M2 = colMeans
+                    # PS IF correction — psi convention, convert to phi
                     n_all_panel = n_t + n_c
                     W_ps = pscore_all * (1 - pscore_all)
                     if sw_all is not None:
                         W_ps = W_ps * sw_all
-                    H_ps = X_all_int.T @ (W_ps[:, None] * X_all_int)
-                    H_ps_inv = _safe_inv(H_ps)
+                    H_psi = X_all_int.T @ (W_ps[:, None] * X_all_int) / n_all_panel
+                    H_psi_inv = _safe_inv(H_psi)
 
                     D_all = np.concatenate([np.ones(n_t), np.zeros(n_c)])
                     score_ps = (D_all - pscore_all)[:, None] * X_all_int
                     if sw_all is not None:
                         score_ps = score_ps * sw_all[:, None]
-                    asy_lin_rep_ps = score_ps @ H_ps_inv
+                    asy_lin_rep_psi = score_ps @ H_psi_inv / n_all_panel
 
                     dr_resid_control = m_control - control_change
                     M2_dr = np.mean(
@@ -2336,7 +2336,7 @@ class CallawaySantAnna(
                         * X_all_int[n_t:],
                         axis=0,
                     )
-                    inf_func = inf_func + asy_lin_rep_ps @ M2_dr
+                    inf_func = inf_func + (asy_lin_rep_psi @ M2_dr) / n_all_panel
 
                     # --- OR IF correction ---
                     # Accounts for outcome regression estimation uncertainty
@@ -2376,7 +2376,7 @@ class CallawaySantAnna(
                 inf_func = np.concatenate([psi_treated, psi_control])
 
                 if X_treated is not None and X_control is not None and X_treated.shape[1] > 0:
-                    # --- PS IF correction — R convention: H/n, asy_rep/n, colMeans ---
+                    # --- PS IF correction — psi convention, convert to phi ---
                     n_all_panel = n_t + n_c
                     X_all_int = np.column_stack([np.ones(n_all_panel), X_all])
                     pscore_treated_clipped = np.clip(
@@ -2385,19 +2385,19 @@ class CallawaySantAnna(
                     pscore_all = np.concatenate([pscore_treated_clipped, pscore_control])
 
                     W_ps = pscore_all * (1 - pscore_all)
-                    H_ps = X_all_int.T @ (W_ps[:, None] * X_all_int)
-                    H_ps_inv = _safe_inv(H_ps)
+                    H_psi = X_all_int.T @ (W_ps[:, None] * X_all_int) / n_all_panel
+                    H_psi_inv = _safe_inv(H_psi)
 
                     D_all = np.concatenate([np.ones(n_t), np.zeros(n_c)])
                     score_ps = (D_all - pscore_all)[:, None] * X_all_int
-                    asy_lin_rep_ps = score_ps @ H_ps_inv
+                    asy_lin_rep_psi = score_ps @ H_psi_inv / n_all_panel
 
                     dr_resid_control = m_control - control_change
                     M2_dr = np.mean(
                         ((weights_control / n_t) * dr_resid_control)[:, None] * X_all_int[n_t:],
                         axis=0,
                     )
-                    inf_func = inf_func + asy_lin_rep_ps @ M2_dr
+                    inf_func = inf_func + (asy_lin_rep_psi @ M2_dr) / n_all_panel
 
                     # --- OR IF correction ---
                     X_c_int = X_control_with_intercept
@@ -3123,43 +3123,39 @@ class CallawaySantAnna(
 
         psi_all = np.concatenate([psi_gt, psi_gs, psi_ct, psi_cs])
 
-        # --- PS IF correction (R: asy.lin.rep.ps %*% M2) ---
+        # --- PS IF correction — psi convention, convert to phi ---
         X_all_int = np.column_stack([np.ones(n_all), X_all])
 
         W_ps = pscore * (1 - pscore)
         if sw_all is not None:
             W_ps = W_ps * sw_all
-        H_ps = X_all_int.T @ (W_ps[:, None] * X_all_int)
-        H_ps_inv = _safe_inv(H_ps)
+        # R: Hessian.ps = crossprod(X * sqrt(W)) / n
+        H_psi = X_all_int.T @ (W_ps[:, None] * X_all_int) / n_all
+        H_psi_inv = _safe_inv(H_psi)
 
         score_ps = (D_all - pscore)[:, None] * X_all_int
         if sw_all is not None:
             score_ps = score_ps * sw_all[:, None]
-        asy_lin_rep_ps = score_ps @ H_ps_inv  # (n_all, p+1)
+        # R: asy.lin.rep.ps = score %*% solve(Hessian.ps) / n
+        asy_lin_rep_psi = score_ps @ H_psi_inv / n_all
 
-        # =================================================================
-        # Convert leading psi to library phi convention: phi = psi / n_all
-        # =================================================================
+        # Convert leading psi to phi: phi = psi / n_all
         inf_all = psi_all / n_all
 
-        # --- PS nuisance correction (added in phi convention) ---
-        # R: M2 = colMeans(w_ipw * (y-mu) * X) across ALL n obs.
-        # colMeans = sum/n_all; treated rows contribute zero.
-        # asy_lin_rep_ps @ M2 matches R's psi_ps but with our bread
-        # convention (no 1/n), so the product is already in phi scale.
+        # PS nuisance correction in psi convention
+        # R: M2 = colMeans(w_ipw * (y-mu) * X)
         ipw_resid_ct = w_ct_norm * (y_ct - mu_ct_ipw)
         ipw_resid_cs = w_cs_norm * (y_cs - mu_cs_ipw)
 
         ct_slice = slice(n_gt + n_gs, n_gt + n_gs + n_ct)
         cs_slice = slice(n_gt + n_gs + n_ct, None)
 
-        # R: M2 = colMeans(...) = sum(...) / n
         M2 = np.zeros(X_all_int.shape[1])
-        M2 += np.sum(ipw_resid_ct[:, None] * X_all_int[ct_slice], axis=0) / n_all
-        M2 -= np.sum(ipw_resid_cs[:, None] * X_all_int[cs_slice], axis=0) / n_all
+        M2 += np.mean(ipw_resid_ct[:, None] * X_all_int[ct_slice], axis=0)
+        M2 -= np.mean(ipw_resid_cs[:, None] * X_all_int[cs_slice], axis=0)
 
-        # R: att.inf.func += asy.lin.rep.ps %*% M2  (phi-scale correction)
-        inf_all = inf_all + asy_lin_rep_ps @ M2
+        # psi-scale correction, convert to phi
+        inf_all = inf_all + (asy_lin_rep_psi @ M2) / n_all
 
         # =================================================================
         # SE from phi: se = sqrt(sum(phi^2))
@@ -3446,25 +3442,24 @@ class CallawaySantAnna(
         inf_all = psi_all / n_all
 
         # =====================================================================
-        # 9. PS nuisance correction (phi-scale)
-        #    asy_lin_rep_ps @ M2 with M2 = colMeans(...) is already in phi
-        #    scale because our bread omits R's 1/n factor while M2 absorbs it.
+        # 9. PS nuisance correction — psi convention, convert to phi
         # =====================================================================
         X_all_int = np.column_stack([np.ones(n_all), X_all])
 
         W_ps = pscore * (1 - pscore)
         if sw_all is not None:
             W_ps = W_ps * sw_all
-        H_ps = X_all_int.T @ (W_ps[:, None] * X_all_int)
-        H_ps_inv = _safe_inv(H_ps)
+        # R: Hessian.ps = crossprod(X * sqrt(W)) / n
+        H_psi = X_all_int.T @ (W_ps[:, None] * X_all_int) / n_all
+        H_psi_inv = _safe_inv(H_psi)
 
         score_ps = (D_all - pscore)[:, None] * X_all_int
         if sw_all is not None:
             score_ps = score_ps * sw_all[:, None]
-        asy_lin_rep_ps = score_ps @ H_ps_inv  # (n_all, p+1)
+        # R: asy.lin.rep.ps = score %*% solve(Hessian.ps) / n
+        asy_lin_rep_psi = score_ps @ H_psi_inv / n_all
 
         # R: M2 = colMeans(w_ipw * dr_resid / mean(w_ipw) * X)
-        # colMeans = sum / n_all; treated rows contribute zero.
         ct_slice = slice(n_gt + n_gs, n_gt + n_gs + n_ct)
         cs_slice = slice(n_gt + n_gs + n_ct, None)
 
@@ -3473,23 +3468,18 @@ class CallawaySantAnna(
 
         M2 = np.zeros(X_all_int.shape[1])
         if sum_w_ipw_ct > 0:
-            M2 -= (
-                np.sum(
-                    ((w_ipw_ct * dr_resid_ct / sum_w_ipw_ct)[:, None] * X_all_int[ct_slice]),
-                    axis=0,
-                )
-                / n_all
+            M2 -= np.mean(
+                ((w_ipw_ct * dr_resid_ct / sum_w_ipw_ct)[:, None] * X_all_int[ct_slice]),
+                axis=0,
             )
         if sum_w_ipw_cs > 0:
-            M2 += (
-                np.sum(
-                    ((w_ipw_cs * dr_resid_cs / sum_w_ipw_cs)[:, None] * X_all_int[cs_slice]),
-                    axis=0,
-                )
-                / n_all
+            M2 += np.mean(
+                ((w_ipw_cs * dr_resid_cs / sum_w_ipw_cs)[:, None] * X_all_int[cs_slice]),
+                axis=0,
             )
 
-        inf_all = inf_all + asy_lin_rep_ps @ M2
+        # psi-scale correction, convert to phi
+        inf_all = inf_all + (asy_lin_rep_psi @ M2) / n_all
 
         # =====================================================================
         # 10. Control OR nuisance corrections (phi-scale)
