@@ -133,28 +133,14 @@ variance estimation for heterogeneity-robust DiD estimators.
 
 ### 7a. CallawaySantAnna Covariates + IPW/DR + Survey ✅
 
-**Priority: High.** This is the single highest-impact gap. The Callaway-Sant'Anna
-`reg` method with covariates already works under survey designs, but the
-recommended IPW and DR methods raise `NotImplementedError`. Most applied work
-(Medicaid expansion, minimum wage studies) uses DR with covariates.
-
-**What's needed:**
-- Implement DRDID panel nuisance-estimation influence function corrections
-  under survey weights (Sant'Anna & Zhao 2020, Theorem 3.1)
-- Survey-weighted propensity score estimation via `solve_logit()` (already
-  available from Phase 4)
-- Survey-weighted outcome regression for imputation step
-- Correct IF that accounts for nuisance parameter estimation uncertainty
-  under the survey design
-- Thread `ResolvedSurveyDesign` through the IPW and DR paths in
-  `_estimate_att_gt()`
+**Implemented.** DRDID panel nuisance-estimation IF corrections (PS + OR)
+for both survey and non-survey IPW/DR paths. Survey-weighted propensity
+score estimation via `solve_logit()`, survey-weighted outcome regression,
+and IFs that account for nuisance parameter estimation uncertainty under
+the survey design (Sant'Anna & Zhao 2020, Theorem 3.1).
 
 **Reference:** Sant'Anna, P.H.C. & Zhao, J. (2020). "Doubly Robust
 Difference-in-Differences Estimators." *Journal of Econometrics* 219(1).
-
-**Current gate:** `staggered.py` — `NotImplementedError` when
-`estimation_method in ('ipw', 'dr')` and covariates are provided with
-`survey_design`.
 
 ### 7b. Repeated Cross-Sections ✅
 

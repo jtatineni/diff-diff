@@ -25,6 +25,7 @@ from diff_diff.prep_dgp import (
     generate_ddd_data,
     generate_panel_data,
     generate_event_study_data,
+    generate_staggered_ddd_data,
 )
 
 # Constants for rank_control_units

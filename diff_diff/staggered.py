@@ -2082,7 +2082,8 @@ class CallawaySantAnna(
                 )
 
                 # psi-scale correction, convert to phi for storage
-                inf_func = inf_func + (asy_lin_rep_psi @ M2) / n_all_panel
+                # Subtract: R adds PS correction to inf.control, then att = treat - control
+                inf_func = inf_func - (asy_lin_rep_psi @ M2) / n_all_panel
 
                 # SE from influence function variance
                 var_psi = np.sum(inf_func**2)
@@ -3158,7 +3159,8 @@ class CallawaySantAnna(
         M2 -= np.sum(ipw_resid_cs[:, None] * X_all_int[cs_slice], axis=0)
 
         # psi-scale correction, convert to phi
-        inf_all = inf_all + (asy_lin_rep_psi @ M2) / n_all
+        # Subtract: R adds PS correction to inf.control, then att = treat - control
+        inf_all = inf_all - (asy_lin_rep_psi @ M2) / n_all
 
         # =================================================================
         # SE from phi: se = sqrt(sum(phi^2))
